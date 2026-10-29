@@ -1,0 +1,13 @@
+# Secrets: never commit
+.env
+.env.*
+!.env.example
+# Dev Firefox profile from `npm run start:firefox`; holds the API key you enter there
+.firefox-profile/
+
+node_modules/
+dist/
+web-ext-artifacts/
+test-results/
+playwright-report/
+.DS_Store

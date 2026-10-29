@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "Deals Analyzer for eDealinfo",
+  "version": "1.0.0",
+  "description": "Rates eDealinfo.com deals (strong no to strong yes) against current market prices using Claude with web search.",
+  "icons": {
+    "16": "icons/icon-16.png",
+    "32": "icons/icon-32.png",
+    "48": "icons/icon-48.png",
+    "128": "icons/icon-128.png"
+  },
+  "action": {
+    "default_title": "Deals Analyzer settings",
+    "default_icon": {
+      "16": "icons/icon-16.png",
+      "32": "icons/icon-32.png"
+    }
+  },
+  "options_ui": {
+    "page": "src/options/options.html",
+    "open_in_tab": true
+  },
+  "background": {
+    "service_worker": "src/background/service-worker.js",
+    "scripts": ["src/background/service-worker.js"],
+    "type": "module"
+  },
+  "permissions": ["storage"],
+  "host_permissions": ["https://api.anthropic.com/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.edealinfo.com/*", "https://edealinfo.com/*"],
+      "js": ["src/content/extract.js", "src/content/panel.js", "src/content/main.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "deals-analyzer@local.extension",
+      "strict_min_version": "142.0",
+      "data_collection_permissions": {
+        "required": ["websiteContent"]
+      }
+    }
+  }
+}

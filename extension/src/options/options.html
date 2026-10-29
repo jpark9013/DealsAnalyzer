@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Deals Analyzer settings</title>
+    <link rel="stylesheet" href="options.css" />
+    <script type="module" src="options.js"></script>
+  </head>
+  <body>
+    <main>
+      <h1>Deals Analyzer</h1>
+      <p class="lede">
+        Rates deals on eDealinfo.com from <strong>strong no</strong> to <strong>strong yes</strong> by having Claude
+        search current prices for the same and similar products.
+      </p>
+
+      <div id="permission-warning" class="callout warn" hidden>
+        <p>The extension doesn't have access to eDealinfo.com and api.anthropic.com yet.</p>
+        <button type="button" id="grant">Grant access</button>
+      </div>
+
+      <form id="settings" novalidate>
+        <section>
+          <label for="apiKey">Anthropic API key</label>
+          <div class="row">
+            <input id="apiKey" name="apiKey" type="password" autocomplete="off" spellcheck="false" placeholder="sk-ant-…" />
+            <button type="button" id="toggle-key" aria-pressed="false">Show</button>
+            <button type="button" id="test-key">Test key</button>
+          </div>
+          <p class="hint">
+            Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener noreferrer">console.anthropic.com</a>.
+            It's stored only in this browser and only sent to api.anthropic.com. Testing it is free.
+          </p>
+          <p id="key-status" class="status" role="status"></p>
+        </section>
+
+        <section>
+          <label for="model">Model</label>
+          <select id="model" name="model"></select>
+        </section>
+
+        <section>
+          <label for="effort">Effort</label>
+          <select id="effort" name="effort">
+            <option value="low">Low — fastest and cheapest, may search less</option>
+            <option value="medium">Medium — recommended</option>
+            <option value="high">High — most careful, slower</option>
+          </select>
+        </section>
+
+        <section>
+          <label for="maxSearches">Web searches per deal (at most)</label>
+          <input id="maxSearches" name="maxSearches" type="number" min="1" max="10" step="1" />
+          <p class="hint">Each search costs $0.01. With Haiku, a typical analysis costs about $0.02–$0.07 in total.</p>
+        </section>
+
+        <section class="check">
+          <input id="autoAnalyze" name="autoAnalyze" type="checkbox" />
+          <label for="autoAnalyze">Analyze automatically when I open a deal page</label>
+        </section>
+
+        <div class="actions">
+          <button type="submit" class="primary">Save</button>
+          <span id="save-status" class="status" role="status"></span>
+        </div>
+      </form>
+
+      <section class="cache">
+        <h2>Saved results</h2>
+        <p class="hint">Verdicts are kept for 24 hours so revisiting a deal is free. Use "Re-analyze" in the panel to refresh one.</p>
+        <button type="button" id="clear-cache">Clear saved results</button>
+        <span id="cache-status" class="status" role="status"></span>
+      </section>
+
+      <p class="hint privacy">
+        When you analyze a deal, its details (title, price, store, model number) are sent to Anthropic's API, which
+        runs the web searches. Nothing else from your browsing is sent.
+      </p>
+    </main>
+  </body>
+</html>

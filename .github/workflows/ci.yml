@@ -1,0 +1,131 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  # Superseded PR runs can be cancelled; runs on main may be publishing a release.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  lint:
+    name: Lint (ESLint + web-ext)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx eslint .
+      - run: npm run lint:ext
+
+  unit:
+    name: Unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test
+
+  e2e:
+    name: Extension in Chromium
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      # Hermetic: saved eDealinfo pages and a stubbed Claude API. No secrets needed.
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+
+  package:
+    name: Package extension
+    needs: [lint, unit, e2e]
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Stamp the build number into the version
+        id: version
+        run: node scripts/set-build-version.mjs "${{ github.run_number }}"
+      - run: npm run package
+      - name: Name the zip after the version
+        run: mv dist/*.zip "dist/deals-analyzer-${{ steps.version.outputs.version }}.zip"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: deals-analyzer-extension
+          path: dist/*.zip
+          retention-days: 30
+
+  release:
+    name: Publish GitHub release
+    # Only pushes to main, and only after lint, unit and browser tests passed.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: deals-analyzer-extension
+          path: dist
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.package.outputs.version }}
+          # Passed through the environment, never pasted into the script, so a
+          # commit message can't inject shell commands.
+          COMMIT_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          ZIP="deals-analyzer-$VERSION.zip"
+          cat > notes.md <<EOF
+          ### Install
+
+          Download **$ZIP** below.
+
+          - **Chrome / Edge / Brave:** unzip it, open \`chrome://extensions\`, turn on *Developer mode*, click **Load unpacked**, and pick the unzipped folder.
+          - **Firefox:** open \`about:debugging#/runtime/this-firefox\`, click **Load Temporary Add-on…**, and pick the zip itself (no need to unzip). Firefox removes temporary add-ons when it restarts.
+
+          Then open the extension's settings, paste your Anthropic API key, click **Test key**, and **Save**.
+
+          ### Changes
+
+          $COMMIT_MESSAGE
+
+          Commit: $GITHUB_SHA
+          EOF
+          gh release create "v$VERSION" "dist/$ZIP" \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Deals Analyzer $VERSION" \
+            --notes-file notes.md \
+            --latest

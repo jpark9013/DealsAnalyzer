@@ -2,7 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { sanitizeSettings, loadSettings, saveSettings, DEFAULT_SETTINGS, MODELS } from '../extension/src/background/settings.js';
 import { estimateCost } from '../extension/src/background/pricing.js';
-import { getCached, putCached, pruneCache, CACHE_TTL_MS } from '../extension/src/background/cache.js';
+import { getCached, putCached, getChat, putChat, pruneCache, CACHE_TTL_MS, MAX_CHATS } from '../extension/src/background/cache.js';
 import { memoryStorage } from './helpers.js';
 
 describe('settings', () => {
@@ -14,11 +14,15 @@ describe('settings', () => {
   test('clamps and repairs bad values', () => {
     assert.deepEqual(
       sanitizeSettings({ apiKey: '  sk-ant-x \n', model: 'gpt-9', effort: 'max', maxSearches: '99', autoAnalyze: 'no' }),
-      { apiKey: 'sk-ant-x', model: 'claude-haiku-5-5', effort: 'medium', maxSearches: 10, autoAnalyze: true }
+      { apiKey: 'sk-ant-x', model: 'claude-haiku-5-5', effort: 'medium', maxSearches: 10, autoAnalyze: true, showOnStores: true, checkInTabs: true }
     );
     assert.equal(sanitizeSettings({ maxSearches: 0 }).maxSearches, 1);
     assert.equal(sanitizeSettings({ maxSearches: 'abc' }).maxSearches, DEFAULT_SETTINGS.maxSearches);
     assert.equal(sanitizeSettings({ autoAnalyze: false }).autoAnalyze, false);
+    assert.equal(sanitizeSettings({ showOnStores: false }).showOnStores, false);
+    assert.equal(sanitizeSettings({}).showOnStores, true);
+    assert.equal(sanitizeSettings({ checkInTabs: false }).checkInTabs, false);
+    assert.equal(sanitizeSettings({}).checkInTabs, true);
   });
 
   test('round-trips through storage', async () => {
@@ -69,6 +73,11 @@ describe('verdict cache', () => {
     assert.equal(await getCached(storage, 'deal-1', 'claude-haiku-5-5', 1_000 + CACHE_TTL_MS + 1), null);
   });
 
+  test('ignores entries stored in an older format', async () => {
+    const storage = memoryStorage({ 'verdict:claude-haiku-5-5:deal-1': { savedAt: 1_000, result } });
+    assert.equal(await getCached(storage, 'deal-1', 'claude-haiku-5-5', 1_000), null);
+  });
+
   test('keeps models separate', async () => {
     const storage = memoryStorage();
     await putCached(storage, 'deal-1', 'claude-haiku-5-5', result, 1_000);
@@ -79,8 +88,37 @@ describe('verdict cache', () => {
     const storage = memoryStorage({ settings: { apiKey: 'k' } });
     await putCached(storage, 'old', 'm', result, 0);
     await putCached(storage, 'new', 'm', result, CACHE_TTL_MS + 10);
-    assert.deepEqual(Object.keys(storage.data).sort(), ['settings', 'verdict:m:new']);
+    assert.deepEqual(Object.keys(storage.data).sort(), ['settings', 'verdict:v3:m:new']);
     assert.equal(await pruneCache(storage, 0, { all: true }), 1);
     assert.deepEqual(Object.keys(storage.data), ['settings']);
+  });
+});
+
+describe('chat history', () => {
+  const chat = { turns: [{ role: 'user', text: 'Q' }, { role: 'assistant', text: 'A' }] };
+
+  test('is stored per deal and model, and expires with the verdicts', async () => {
+    const storage = memoryStorage();
+    await putChat(storage, 'deal-1', 'claude-haiku-5-5', chat, 1_000);
+    assert.deepEqual(await getChat(storage, 'deal-1', 'claude-haiku-5-5', 2_000), chat);
+    assert.equal(await getChat(storage, 'deal-1', 'claude-sonnet-5-5', 2_000), null);
+    assert.equal(await getChat(storage, 'deal-1', 'claude-haiku-5-5', 1_000 + CACHE_TTL_MS + 1), null);
+  });
+
+  test('keeps only the newest chats', async () => {
+    const storage = memoryStorage();
+    for (let i = 0; i < MAX_CHATS + 3; i++) await putChat(storage, `deal-${i}`, 'm', chat, 1_000 + i);
+    const kept = Object.keys(storage.data).filter((k) => k.startsWith('chat:'));
+    assert.equal(kept.length, MAX_CHATS);
+    assert.ok(!kept.includes('chat:v1:m:deal-0'), 'the oldest chat went first');
+    assert.ok(kept.includes(`chat:v1:m:deal-${MAX_CHATS + 2}`));
+  });
+
+  test('"clear saved results" clears chats too, and nothing else', async () => {
+    const storage = memoryStorage({ settings: { apiKey: 'k' }, panelLayout: {} });
+    await putCached(storage, 'deal-1', 'm', { verdict: {} }, 1_000);
+    await putChat(storage, 'deal-1', 'm', chat, 1_000);
+    assert.equal(await pruneCache(storage, 1_000, { all: true }), 2);
+    assert.deepEqual(Object.keys(storage.data).sort(), ['panelLayout', 'settings']);
   });
 });

@@ -27,8 +27,12 @@ export const DEFAULT_SETTINGS = {
   apiKey: '',
   model: DEFAULT_MODEL,
   effort: 'medium',
-  maxSearches: 5,
-  autoAnalyze: true
+  maxSearches: 6,
+  autoAnalyze: true,
+  // The panel on store product pages. Off hides it there; the toolbar button still works.
+  showOnStores: true,
+  // Stores that block the background price check get opened in a background tab instead.
+  checkInTabs: true
 };
 
 export const MIN_SEARCHES = 1;
@@ -45,7 +49,9 @@ export function sanitizeSettings(raw) {
     maxSearches: Number.isFinite(searches)
       ? Math.min(MAX_SEARCHES, Math.max(MIN_SEARCHES, searches))
       : DEFAULT_SETTINGS.maxSearches,
-    autoAnalyze: s.autoAnalyze !== false
+    autoAnalyze: s.autoAnalyze !== false,
+    showOnStores: s.showOnStores !== false,
+    checkInTabs: s.checkInTabs !== false
   };
 }
 

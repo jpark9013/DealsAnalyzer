@@ -2,7 +2,7 @@ import js from '@eslint/js';
 import globals from 'globals';
 
 export default [
-  { ignores: ['node_modules/', 'dist/', 'test-results/', 'playwright-report/', 'web-ext-artifacts/'] },
+  { ignores: ['node_modules/', 'dist/', 'test-results/', 'playwright-report/', 'web-ext-artifacts/', '.firefox-profile/'] },
   js.configs.recommended,
   {
     // Content scripts are classic scripts sharing globalThis.DealsAnalyzer.

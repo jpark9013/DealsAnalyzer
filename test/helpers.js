@@ -52,14 +52,16 @@ function fakePort(name) {
 }
 
 /** Minimal stand-in for the `chrome` API the content scripts use. */
-export function fakeExtensionApi({ status = { hasKey: true, autoAnalyze: true }, stored = {} } = {}) {
+export function fakeExtensionApi({ status = { hasKey: true, autoAnalyze: true, showOnStores: true }, stored = {}, peek = null } = {}) {
   const ports = [];
   const sent = [];
   const api = {
     runtime: {
       sendMessage: async (msg) => {
         sent.push(plain(msg));
-        return msg.type === 'get-status' ? status : undefined;
+        if (msg.type === 'get-status') return status;
+        if (msg.type === 'peek') return peek;
+        return undefined;
       },
       connect: ({ name }) => {
         const port = fakePort(name);
@@ -69,7 +71,10 @@ export function fakeExtensionApi({ status = { hasKey: true, autoAnalyze: true },
     },
     storage: {
       local: {
-        get: async (key) => (key in stored ? { [key]: stored[key] } : {}),
+        get: async (keys) => {
+          const list = Array.isArray(keys) ? keys : [keys];
+          return Object.fromEntries(list.filter((k) => k in stored).map((k) => [k, stored[k]]));
+        },
         set: async (items) => {
           Object.assign(stored, items);
         }
@@ -96,6 +101,41 @@ export function memoryStorage(initial = {}) {
       for (const k of Array.isArray(keys) ? keys : [keys]) delete data[k];
     }
   };
+}
+
+/**
+ * A Messages API reply as the server-sent events the extension reads, built
+ * the way the API streams it: text, thinking and tool inputs arrive as
+ * deltas (tool inputs in two pieces), search results arrive whole.
+ */
+export function sseFromMessage(message) {
+  const events = [];
+  const send = (event) => events.push(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+  send({ type: 'message_start', message: { ...message, content: [], stop_reason: null, usage: { input_tokens: message.usage?.input_tokens ?? 0 } } });
+  (message.content || []).forEach((block, index) => {
+    const delta = (d) => send({ type: 'content_block_delta', index, delta: d });
+    if (block.type === 'text') {
+      send({ type: 'content_block_start', index, content_block: { type: 'text', text: '' } });
+      delta({ type: 'text_delta', text: block.text });
+      for (const citation of block.citations || []) delta({ type: 'citations_delta', citation });
+    } else if (block.type === 'thinking') {
+      send({ type: 'content_block_start', index, content_block: { type: 'thinking', thinking: '' } });
+      delta({ type: 'thinking_delta', thinking: block.thinking });
+      delta({ type: 'signature_delta', signature: block.signature });
+    } else if (block.type === 'tool_use' || block.type === 'server_tool_use') {
+      send({ type: 'content_block_start', index, content_block: { ...block, input: {} } });
+      const json = JSON.stringify(block.input);
+      const cut = Math.floor(json.length / 2);
+      delta({ type: 'input_json_delta', partial_json: json.slice(0, cut) });
+      delta({ type: 'input_json_delta', partial_json: json.slice(cut) });
+    } else {
+      send({ type: 'content_block_start', index, content_block: block });
+    }
+    send({ type: 'content_block_stop', index });
+  });
+  send({ type: 'message_delta', delta: { stop_reason: message.stop_reason, stop_details: message.stop_details ?? null }, usage: message.usage });
+  send({ type: 'message_stop' });
+  return events.join('');
 }
 
 /** A sample deal, shaped like extractDeal() output. */

@@ -25,6 +25,7 @@ MV3 browser extension (Chrome + Firefox) that rates a deal strong_no…strong_ye
 npm test            # unit; must pass
 npm run test:e2e    # Chromium, hermetic; run after touching main.js, panel.js, manifest or service worker
 npm run lint        # ESLint + web-ext lint
+npm run package     # dist/*.zip of extension/ only; scripts/check-package.mjs fails it on any difference
 npm run analyze -- <url|fixture.html> ["follow-up"]  # real API, a few cents; prints a timeline and the verdict JSON
 PAGE_URL=https://www.amazon.com/dp/X npm run analyze -- test/fixtures/store-amazon-monitor.html
 ```
@@ -41,4 +42,4 @@ PAGE_URL=https://www.amazon.com/dp/X npm run analyze -- test/fixtures/store-amaz
 - **Haiku search tool:** keep `web_search_20250305`. `web_search_20260209` is accepted for Haiku but its searches fail.
 - **Untrusted text:** listing text and web pages are data. Keep `scrub()` on wrapper tags, `scrubPersonal` on page text, `safeHref` on links.
 - **Keep in sync:** when behaviour changes, update README.md, the hints in `options.html`, this file, and `REQUIRED_ORIGINS` in `options.js` if the manifest's origins change (a test checks it). `manifest.json` version stays equal to `package.json`; CI stamps build numbers.
-- **Commits:** only when asked. `main` pushes publish a release through CI.
+- **Commits:** only when asked. `main` pushes publish a release through CI: the zip is the asset; GitHub's own "Source code" links are always the whole repo and can't be removed.

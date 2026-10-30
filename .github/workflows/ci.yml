@@ -110,7 +110,7 @@ jobs:
           cat > notes.md <<EOF
           ### Install
 
-          Download **$ZIP** below.
+          Download **$ZIP** below. It holds only the extension. The "Source code" links GitHub adds to every release are the whole repository, and won't load as an extension.
 
           - **Chrome / Edge / Brave:** unzip it, open \`chrome://extensions\`, turn on *Developer mode*, click **Load unpacked**, and pick the unzipped folder.
           - **Firefox:** open \`about:debugging#/runtime/this-firefox\`, click **Load Temporary Add-on…**, and pick the zip itself (no need to unzip). Firefox removes temporary add-ons when it restarts.

@@ -35,7 +35,7 @@ A page counts as a product page when it declares one (schema.org product data, p
 
 You need an Anthropic API key from [console.anthropic.com](https://console.anthropic.com/settings/keys).
 
-Download `deals-analyzer-<version>.zip` from the latest release on the repo's **Releases** page. Every push to `main` that passes CI publishes a new one. To run straight from a clone instead, use the **`extension/`** folder (not the repo root) wherever the steps below say "the unzipped folder" or "the zip".
+Download `deals-analyzer-<version>.zip` from the latest release on the repo's **Releases** page. It holds only the `extension/` folder's contents; the "Source code" links GitHub adds to every release are the whole repository, and won't load as an extension. Every push to `main` that passes CI publishes a new one. To run straight from a clone instead, use the **`extension/`** folder (not the repo root) wherever the steps below say "the unzipped folder" or "the zip".
 
 **Chrome / Edge / Brave**
 1. Unzip the download.
@@ -149,7 +149,7 @@ npm test               # unit tests: extractor on saved eDealinfo pages, API loo
 npm run test:e2e       # loads the extension in Chromium against saved pages and a stubbed API (run `npx playwright install chromium` once)
 npm run lint           # ESLint + Mozilla's web-ext lint
 npm run canary         # checks that today's live eDealinfo deals still parse
-npm run package        # builds dist/*.zip from extension/
+npm run package        # builds dist/*.zip from extension/, and fails unless it holds exactly that folder
 ```
 
 **Prompt work.** `npm run analyze -- <deal or product page URL, or saved .html> ["follow-up question"]` runs one analysis, plus an optional follow-up, from the command line. It prints a timeline (each search, each stage, when the rating arrived) and then the full verdict as JSON, which makes before/after comparisons of prompts and timing easy. For a saved store page, set `PAGE_URL` to the address it came from, since the Amazon reader is picked by site. It uses the key in `.env` and costs a few cents per run.

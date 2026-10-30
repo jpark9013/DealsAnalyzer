@@ -2,75 +2,94 @@
 
 export const RATINGS = ['strong_no', 'no', 'maybe', 'yes', 'strong_yes'];
 export const CONFIDENCE = ['low', 'medium', 'high'];
+// How a comparable offer's specs and build quality compare with the deal's product.
+export const MATCHES = ['same_item', 'equivalent', 'better', 'worse'];
 
 const nullableNumber = { anyOf: [{ type: 'number' }, { type: 'null' }] };
-const nullableString = { anyOf: [{ type: 'string' }, { type: 'null' }] };
+const strings = (description) => ({ type: 'array', items: { type: 'string' }, description });
 
 // Claude answers through this tool rather than free text: `strict` guarantees
 // the input matches the schema, which free-form JSON after web searches doesn't.
+// Every output token costs time (Haiku writes ~300 a second), so keys are short
+// and text is capped in words. Offers and savings carry the URL of the search
+// result they came from: matching by name left most offers without a link, and
+// resolveOffers in claude.js accepts only URLs Claude actually saw.
+// The prices come before the rating, which is measured against them; the
+// offers and reasons follow, so the rating reaches the panel early.
 export const VERDICT_TOOL = {
   name: 'submit_verdict',
-  description:
-    'Submit your final assessment of the deal. Call this exactly once, after you have finished searching. ' +
-    'Prices are in US dollars, including any required shipping.',
+  description: 'Submit your assessment once you have finished searching. Prices are USD including required shipping.',
   strict: true,
   input_schema: {
     type: 'object',
     additionalProperties: false,
-    required: [
-      'rating',
-      'confidence',
-      'headline',
-      'deal_price',
-      'typical_price',
-      'lowest_recent_price',
-      'comparable_offers',
-      'reasons_for',
-      'reasons_against'
-    ],
+    required: ['specs', 'seller', 'deal_price', 'same_item_price', 'lowest_price', 'equivalent_price', 'rating', 'confidence', 'headline', 'offers', 'savings', 'pros', 'cons'],
     properties: {
-      rating: { type: 'string', enum: RATINGS, description: 'Overall verdict on whether the deal is worth buying.' },
-      confidence: {
-        type: 'string',
-        enum: CONFIDENCE,
-        description: 'How solid the price evidence you found is.'
-      },
-      headline: { type: 'string', description: 'One short sentence explaining the verdict.' },
-      deal_price: { type: 'number', description: 'The final price of the deal you evaluated.' },
-      typical_price: {
-        ...nullableNumber,
-        description: 'Typical current price of the same product in the same condition at reputable US stores, or null if unknown.'
-      },
-      lowest_recent_price: {
-        ...nullableNumber,
-        description: 'Lowest credible recent price you found for the same product and condition, or null if unknown.'
-      },
-      comparable_offers: {
+      specs: strings('2–6 specs that set its value, a few words each, e.g. "i5-9500T (9th gen)", "120GB SSD".'),
+      seller: { type: 'string', description: 'The store that sells this deal; on a deal site, the store it sends buyers to.' },
+      deal_price: { type: 'number' },
+      same_item_price: { ...nullableNumber, description: 'Typical price of this exact model and configuration, same condition, at reputable US stores.' },
+      lowest_price: { ...nullableNumber, description: 'Lowest credible recent price for this exact model and configuration, same condition.' },
+      equivalent_price: { ...nullableNumber, description: 'Typical price of products with matching key specs and build, same condition.' },
+      rating: { type: 'string', enum: RATINGS },
+      confidence: { type: 'string', enum: CONFIDENCE, description: 'How solid the price evidence is.' },
+      headline: { type: 'string', description: 'Why, under 20 words.' },
+      offers: {
         type: 'array',
-        description: 'Up to 6 offers you found: the same product elsewhere, or similar products that compete with it.',
+        description: "Up to 6 offers you saw on the store's own product page, mostly other models.",
         items: {
           type: 'object',
           additionalProperties: false,
-          required: ['store', 'product', 'price', 'url', 'same_product', 'condition'],
+          required: ['match', 'store', 'url', 'product', 'price', 'condition', 'diff'],
           properties: {
+            match: {
+              type: 'string',
+              enum: MATCHES,
+              description: 'equivalent: other model, matching key specs and build. A different configuration of the same model is better or worse.'
+            },
             store: { type: 'string' },
-            product: { type: 'string' },
-            price: nullableNumber,
-            url: { ...nullableString, description: 'A URL from your search results, or null.' },
-            same_product: { type: 'boolean', description: 'True if this is the exact same model.' },
-            condition: { type: 'string', description: 'new, open box, refurbished, or used.' }
+            url: { type: 'string', description: "That product page's URL, copied exactly from the search result." },
+            product: { type: 'string', description: 'Brand and model number.' },
+            price: { ...nullableNumber, description: 'Price shown on that page, before shipping and tax.' },
+            condition: { type: 'string' },
+            diff: { type: 'string', description: 'Spec differences, under 10 words; empty for same_item.' }
           }
         }
       },
-      reasons_for: { type: 'array', items: { type: 'string' }, description: 'Up to 4 short reasons to buy.' },
-      reasons_against: { type: 'array', items: { type: 'string' }, description: 'Up to 4 short reasons to skip.' }
+      savings: {
+        type: 'array',
+        description: 'Up to 4 ways to pay less for this item that a search result states. Empty if none.',
+        items: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['text', 'url'],
+          properties: {
+            text: { type: 'string', description: 'Store, code or program, who qualifies, under 15 words.' },
+            url: { type: 'string', description: 'The URL of that search result.' }
+          }
+        }
+      },
+      pros: strings('1–4 reasons to buy, under 15 words each.'),
+      cons: strings('1–4 reasons to skip, under 15 words each.')
     }
   }
 };
 
+/** The verdict tool for re-rating with live prices: the offers and savings are already settled. */
+export function revisionTool() {
+  const properties = { ...VERDICT_TOOL.input_schema.properties };
+  for (const settled of ['offers', 'savings', 'seller']) delete properties[settled];
+  return {
+    ...VERDICT_TOOL,
+    input_schema: { ...VERDICT_TOOL.input_schema, required: Object.keys(properties), properties }
+  };
+}
+
 const MAX_TEXT = 300;
 const MAX_REASONS = 4;
+const MAX_SPECS = 6;
 const MAX_OFFERS = 6;
+const MAX_SAVINGS = 4;
 
 function text(value, max = MAX_TEXT) {
   if (typeof value !== 'string') return '';
@@ -83,60 +102,95 @@ function money(value) {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.round(n * 100) / 100 : null;
 }
 
-export function normalizeRating(value) {
+function enumKey(value, allowed) {
   const key = String(value || '')
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
-  return RATINGS.includes(key) ? key : null;
+  return allowed.includes(key) ? key : null;
 }
 
-function httpUrl(value) {
-  if (typeof value !== 'string') return null;
-  try {
-    const url = new URL(value);
-    return url.protocol === 'https:' || url.protocol === 'http:' ? url.href : null;
-  } catch {
-    return null;
-  }
+export function normalizeRating(value) {
+  return enumKey(value, RATINGS);
+}
+
+function textList(value, max, maxLength) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => text(item, maxLength))
+    .filter(Boolean)
+    .slice(0, max);
 }
 
 /**
  * Validates and tidies Claude's verdict. Throws if there is no usable rating,
- * since everything else in the panel hangs off it.
+ * since everything else in the panel hangs off it, unless `partial` is set:
+ * then it tidies whatever part of the verdict has streamed in so far.
  */
-export function normalizeVerdict(input, { fallbackPrice = null } = {}) {
+export function normalizeVerdict(input, { fallbackPrice = null, partial = false } = {}) {
   if (!input || typeof input !== 'object') throw new Error('Verdict is not an object');
   const rating = normalizeRating(input.rating);
-  if (!rating) throw new Error(`Verdict has an unknown rating: ${JSON.stringify(input.rating)}`);
+  if (!rating && !partial) throw new Error(`Verdict has an unknown rating: ${JSON.stringify(input.rating)}`);
 
-  const confidence = CONFIDENCE.includes(input.confidence) ? input.confidence : 'low';
-  const offers = Array.isArray(input.comparable_offers) ? input.comparable_offers : [];
+  const confidence = CONFIDENCE.includes(input.confidence) ? input.confidence : partial ? null : 'low';
+  const offers = Array.isArray(input.offers) ? input.offers : [];
 
   return {
     rating,
     confidence,
-    headline: text(input.headline) || 'No summary provided.',
+    headline: text(input.headline) || (partial ? '' : 'No summary provided.'),
+    keySpecs: textList(input.specs, MAX_SPECS, 80),
+    seller: text(input.seller, 80) || null,
     dealPrice: money(input.deal_price) ?? fallbackPrice,
-    typicalPrice: money(input.typical_price),
-    lowestRecentPrice: money(input.lowest_recent_price),
+    sameItemPrice: money(input.same_item_price),
+    lowestRecentPrice: money(input.lowest_price),
+    equivalentMarketPrice: money(input.equivalent_price),
     comparableOffers: offers
       .filter((o) => o && typeof o === 'object' && text(o.store))
       .slice(0, MAX_OFFERS)
-      .map((o) => ({
-        store: text(o.store, 80),
-        product: text(o.product, 160),
-        price: money(o.price),
-        url: httpUrl(o.url),
-        sameProduct: o.same_product === true,
-        condition: text(o.condition, 30) || 'new'
-      })),
-    reasonsFor: (Array.isArray(input.reasons_for) ? input.reasons_for : []).map((r) => text(r)).filter(Boolean).slice(0, MAX_REASONS),
-    reasonsAgainst: (Array.isArray(input.reasons_against) ? input.reasons_against : [])
-      .map((r) => text(r))
-      .filter(Boolean)
-      .slice(0, MAX_REASONS)
+      .map((o) => {
+        const match = enumKey(o.match, MATCHES);
+        return {
+          store: text(o.store, 80),
+          product: text(o.product, 160),
+          price: money(o.price),
+          // What Claude cited. `url` is only set once resolveOffers() finds it in the search results.
+          citedUrl: text(o.url, 2000) || null,
+          url: null,
+          verified: false,
+          condition: text(o.condition, 30) || 'new',
+          // null when Claude didn't say; the panel shows that as "similar".
+          match,
+          specDifferences: match === 'same_item' ? '' : text(o.diff, 200)
+        };
+      }),
+    savings: (Array.isArray(input.savings) ? input.savings : [])
+      .filter((s) => s && typeof s === 'object' && text(s.text))
+      .slice(0, MAX_SAVINGS)
+      .map((s) => ({ text: text(s.text, 160), citedUrl: text(s.url, 2000) || null, url: null })),
+    // Offers left out because they had no store page or couldn't be bought.
+    offersHidden: 0,
+    reasonsFor: textList(input.pros, MAX_REASONS),
+    reasonsAgainst: textList(input.cons, MAX_REASONS)
   };
+}
+
+/**
+ * Reads a strict tool's input as it streams in. The API sends each top-level
+ * field whole, so the JSON so far usually ends on a field boundary; closing
+ * the object there gives every finished field. Returns null otherwise.
+ */
+export function parsePartialObject(json) {
+  const body = String(json || '').trim().replace(/,\s*$/, '');
+  if (!body.startsWith('{')) return null;
+  for (const candidate of [body, `${body}}`]) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed;
+    } catch {
+      // not at a field boundary yet
+    }
+  }
+  return null;
 }
 
 /** Last-resort parse when Claude writes the verdict as JSON text instead of calling the tool. */

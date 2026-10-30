@@ -11,12 +11,16 @@
     <main>
       <h1>Deals Analyzer</h1>
       <p class="lede">
-        Rates deals on eDealinfo.com from <strong>strong no</strong> to <strong>strong yes</strong> by having Claude
-        search current prices for the same and similar products.
+        Rates deals from <strong>strong no</strong> to <strong>strong yes</strong> by having Claude search current
+        prices for the same and similar products. It runs by itself on eDealinfo.com; on any store's product page,
+        click the toolbar button or press <kbd>Alt+Shift+D</kbd>.
       </p>
 
       <div id="permission-warning" class="callout warn" hidden>
-        <p>The extension doesn't have access to eDealinfo.com and api.anthropic.com yet.</p>
+        <p>
+          The extension doesn't have access to websites and api.anthropic.com yet. It needs them to show the
+          Deal check tab on product pages and to reach Claude.
+        </p>
         <button type="button" id="grant">Grant access</button>
       </div>
 
@@ -55,9 +59,40 @@
           <p class="hint">Each search costs $0.01. With Haiku, a typical analysis costs about $0.02–$0.07 in total.</p>
         </section>
 
-        <section class="check">
-          <input id="autoAnalyze" name="autoAnalyze" type="checkbox" />
-          <label for="autoAnalyze">Analyze automatically when I open a deal page</label>
+        <section>
+          <div class="check">
+            <input id="autoAnalyze" name="autoAnalyze" type="checkbox" />
+            <label for="autoAnalyze">Analyze deals automatically as soon as I open them, on every site</label>
+          </div>
+          <p class="hint">
+            On by default: every product page you look at, on any store or deal site, is checked with no click needed.
+            Each new product costs about $0.05, so browsing many adds up; revisiting one within 24 hours is free, and
+            tabs opened in the background wait until you view them. Turn this off to analyze only when you click.
+          </p>
+        </section>
+
+        <section>
+          <div class="check">
+            <input id="showOnStores" name="showOnStores" type="checkbox" />
+            <label for="showOnStores">Show the panel on store product pages</label>
+          </div>
+          <p class="hint">
+            On by default. Off keeps the extension off store pages, automatic checks included, except eDealinfo. The
+            toolbar button and <kbd>Alt+Shift+D</kbd> work either way.
+          </p>
+        </section>
+
+        <section>
+          <div class="check">
+            <input id="checkInTabs" name="checkInTabs" type="checkbox" />
+            <label for="checkInTabs">Open stores that block the price check in a background tab</label>
+          </div>
+          <p class="hint">
+            On by default. Compared prices are read from each store's page. Most stores allow that in the background;
+            a few (eBay, for example) only load as a real page, so a muted tab opens behind the current one for a few
+            seconds and closes itself. It's a normal visit, so it may appear in that site's recently viewed items. Off,
+            those prices are marked "not confirmed".
+          </p>
         </section>
 
         <div class="actions">
@@ -75,7 +110,10 @@
 
       <p class="hint privacy">
         When you analyze a deal, its details (title, price, store, model number) are sent to Anthropic's API, which
-        runs the web searches. Nothing else from your browsing is sent.
+        runs the web searches. On a store page that includes up to 2,500 characters of the product section's text,
+        with your name and delivery location removed. With automatic analysis on, this happens for every product page
+        you view; turn it off and it happens only when you click. Compared stores' pages are read by your browser, and
+        only the prices go to Claude. Nothing else from your browsing is sent.
       </p>
     </main>
   </body>

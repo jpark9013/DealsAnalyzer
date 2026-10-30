@@ -4,7 +4,9 @@ import { pruneCache } from '../background/cache.js';
 
 const ext = globalThis.browser ?? globalThis.chrome;
 const storage = ext.storage.local;
-const REQUIRED_ORIGINS = ['https://api.anthropic.com/*', 'https://www.edealinfo.com/*'];
+// The API, the pages the content scripts run on (any store's product page), and
+// the store pages the price check reads.
+const REQUIRED_ORIGINS = ['https://api.anthropic.com/*', 'https://*/*', 'http://*/*'];
 
 const $ = (id) => document.getElementById(id);
 const form = $('settings');
@@ -20,7 +22,9 @@ function readForm() {
     model: $('model').value,
     effort: $('effort').value,
     maxSearches: $('maxSearches').value,
-    autoAnalyze: $('autoAnalyze').checked
+    autoAnalyze: $('autoAnalyze').checked,
+    showOnStores: $('showOnStores').checked,
+    checkInTabs: $('checkInTabs').checked
   };
 }
 
@@ -30,6 +34,8 @@ function fillForm(settings) {
   $('effort').value = settings.effort;
   $('maxSearches').value = settings.maxSearches;
   $('autoAnalyze').checked = settings.autoAnalyze;
+  $('showOnStores').checked = settings.showOnStores;
+  $('checkInTabs').checked = settings.checkInTabs;
 }
 
 async function checkPermissions() {

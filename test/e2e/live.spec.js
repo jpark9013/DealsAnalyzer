@@ -43,10 +43,17 @@ test('rates a real eDealinfo deal with the real API', async ({ context, extensio
   const report = await panel.locator('.panel').innerText();
   console.log(`\n----- panel -----\n${report}\n-----------------`);
 
-  if (process.env.LIVE_SCREENSHOT) {
-    await panel.locator('details').evaluate((el) => (el.open = true)).catch(() => {});
-    await page.screenshot({ path: process.env.LIVE_SCREENSHOT });
-  }
+  if (process.env.LIVE_SCREENSHOT) await page.screenshot({ path: process.env.LIVE_SCREENSHOT });
   await expect(panel.locator('[role="alert"]')).toHaveCount(0);
   await expect(panel.locator('.pill')).toHaveText(/^(Strong no|No|Maybe|Yes|Strong yes)$/);
+
+  // Continue the conversation with a suggested question.
+  await panel.getByRole('button', { name: 'What would you buy instead?' }).click();
+  const answer = panel.locator('.msg.assistant, .msg.error').first();
+  await expect(answer).toBeVisible({ timeout: 120_000 });
+  console.log(`\n----- follow-up answer -----\n${await answer.innerText()}\n----------------------------`);
+  await expect(panel.locator('.msg.error')).toHaveCount(0);
+  if (process.env.LIVE_SCREENSHOT) {
+    await panel.locator('.panel').screenshot({ path: process.env.LIVE_SCREENSHOT.replace(/\.png$/, '-chat.png') });
+  }
 });

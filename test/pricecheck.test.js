@@ -1,6 +1,6 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
-import { readStorePage, checkOffers, tabReader, isHelperTab, modelTokens } from '../extension/src/background/pricecheck.js';
+import { readStorePage, checkOffers, prefetchOffers, tabReader, isHelperTab, modelTokens, foreignStore, nameWords } from '../extension/src/background/pricecheck.js';
 
 const ld = (data) => `<script type="application/ld+json">${JSON.stringify(data)}</script>`;
 const product = (name, price, extra = {}) => ({
@@ -32,9 +32,14 @@ describe('readStorePage', () => {
     assert.equal(readStorePage(html, { url: 'https://a.example/p/1', tokens }).inStock, false);
   });
 
-  test('ignores prices in other currencies', () => {
+  test("calls a page priced in another currency another country's store", () => {
     const html = page('Sony WH-1000XM5', ld(product('Sony WH-1000XM5', 239, { priceCurrency: 'GBP' })));
-    assert.equal(readStorePage(html, { url: 'https://a.example/p/1', tokens }).state, 'unreadable');
+    assert.equal(readStorePage(html, { url: 'https://a.example/p/1', tokens }).state, 'foreign');
+    // Or one that sends a US shopper to a country's storefront.
+    const us = page('Sony WH-1000XM5', ld(product('Sony WH-1000XM5', 239)));
+    assert.equal(readStorePage(us, { url: 'https://www.bestbuy.ca/en-ca/product/sony/123', tokens }).state, 'foreign');
+    assert.equal(readStorePage(us, { url: 'https://www.amazon.co.uk/dp/B0ABCDEFGH', tokens }).state, 'foreign');
+    assert.equal(readStorePage(us, { url: 'https://www.bhphotovideo.com/c/product/1.html', tokens }).state, 'read');
   });
 
   test('reads Amazon\'s price to pay, not the struck-out list price', () => {
@@ -261,5 +266,92 @@ describe('tabReader', () => {
     };
     assert.equal((await tabReader(ext, { sleep })('https://a.example/p/1', tokens)).state, 'blocked');
     assert.deepEqual(ext.log.at(-1), ['remove', 9]);
+  });
+});
+
+// What used to come back as a "cheaper price elsewhere" that the shopper then couldn't find.
+describe('offers that look fine but cannot be bought', () => {
+  const offer = (over = {}) => ({ store: 'eBay', product: 'Sony WH-1000XM5', url: 'https://www.ebay.com/itm/1', price: 150, condition: 'new', match: 'same_item', ...over });
+  const serve = (html, status = 200) => async (url) => ({ status, url, text: async () => html });
+
+  test('an ended marketplace listing is gone, though its page still shows the price', () => {
+    const html = page('Sony WH-1000XM5', `<div class="status">This listing was ended by the seller because the item is no longer available.</div>${ld(product('Sony WH-1000XM5', 150))}`);
+    assert.equal(readStorePage(html, { url: 'https://www.ebay.com/itm/1', tokens }).state, 'gone');
+  });
+
+  test('"no longer available" in a review far down the page is not the listing ending', () => {
+    const reviews = `<section>${'Great sound, comfortable fit. '.repeat(400)}<p>The product is no longer available at Costco so I got it here.</p></section>`;
+    const html = page('Sony WH-1000XM5', `${ld(product('Sony WH-1000XM5', 150))}${reviews}`);
+    assert.equal(readStorePage(html, { url: 'https://a.example/p/1', tokens }).state, 'read');
+  });
+
+  test('the buy box saying sold out counts when the page publishes no availability', () => {
+    const meta = '<meta property="product:price:amount" content="150"><meta property="og:title" content="Sony WH-1000XM5">';
+    const html = `<html><head><title>Sony WH-1000XM5</title>${meta}</head><body><h1>Sony WH-1000XM5</h1><div class="buy">$150.00 <span>Sold Out</span></div></body></html>`;
+    assert.equal(readStorePage(html, { url: 'https://a.example/p/1', tokens }).inStock, false);
+    // But the page's own "in stock" wins over a sold-out color in its picker.
+    const withData = page('Sony WH-1000XM5', `${ld(product('Sony WH-1000XM5', 150))}<div>Silver: Sold out</div>`);
+    assert.equal(readStorePage(withData, { url: 'https://a.example/p/1', tokens }).inStock, true);
+  });
+
+  test('a price quoted as new but sold refurbished is removed', async () => {
+    const html = page('Sony WH-1000XM5', ld(product('Sony WH-1000XM5', 150, { itemCondition: 'https://schema.org/RefurbishedCondition' })));
+    const { offers, removed } = await checkOffers([offer()], { fetchPage: serve(html) });
+    assert.equal(offers.length, 0);
+    assert.equal(removed[0].reason, 'wrong_condition');
+  });
+
+  test("a marketplace's lowest offer can't confirm a listing's price", async () => {
+    // AggregateOffer: the cheapest of many sellers and conditions, often used.
+    const aggregate = { '@type': 'Product', name: 'Sony WH-1000XM5', offers: { '@type': 'AggregateOffer', lowPrice: 150, highPrice: 280, offerCount: 14, priceCurrency: 'USD' } };
+    const { offers } = await checkOffers([offer()], { fetchPage: serve(page('Sony WH-1000XM5', ld(aggregate))) });
+    assert.equal(offers[0].check, 'unverified');
+  });
+
+  test("a product group's prices are its sizes: one can confirm a quote, none replaces it", async () => {
+    const group = {
+      '@type': 'ProductGroup',
+      name: 'Sony WH-1000XM5',
+      hasVariant: [120, 150, 180].map((price) => ({ '@type': 'Product', offers: { price, priceCurrency: 'USD' } }))
+    };
+    const html = page('Sony WH-1000XM5', ld(group));
+    assert.equal((await checkOffers([offer({ price: 150 })], { fetchPage: serve(html) })).offers[0].check, 'confirmed');
+    assert.equal((await checkOffers([offer({ price: 99 })], { fetchPage: serve(html) })).offers[0].check, 'unverified');
+  });
+
+  test("another country's store is removed, by its currency or its address", async () => {
+    const gbp = page('Sony WH-1000XM5', ld(product('Sony WH-1000XM5', 150, { priceCurrency: 'GBP' })));
+    assert.equal((await checkOffers([offer()], { fetchPage: serve(gbp) })).removed[0].reason, 'foreign');
+    assert.ok(foreignStore('https://www.bestbuy.ca/en-ca/product/x/1'));
+    assert.ok(foreignStore('https://www.amazon.com.au/dp/B0ABCDEFGH'));
+    assert.ok(foreignStore('https://www.apple.com/uk/shop/buy-mac'));
+    assert.ok(!foreignStore('https://www.bestbuy.com/site/x/1.p'));
+    assert.ok(!foreignStore('https://www.apple.com/us-edu/store'));
+    assert.ok(!foreignStore('https://store.example.co/p/1'));
+  });
+
+  test('a product with no model number is still checked by its name', () => {
+    const words = nameWords('Samsung Odyssey G5 27in gaming monitor');
+    assert.deepEqual(words, ['samsung', 'odyssey']);
+    const other = page('LG UltraGear 27GP850', ld(product('LG UltraGear 27GP850', 150)));
+    assert.equal(readStorePage(other, { url: 'https://a.example/p/1', words }).state, 'wrong_product');
+    const right = page('SAMSUNG 27" Odyssey G5', ld(product('SAMSUNG 27" Odyssey G5', 150)));
+    assert.equal(readStorePage(right, { url: 'https://a.example/p/1', words }).state, 'read');
+  });
+
+  test('pages started early are read once, and blocked ones cheaper than the deal get the tabs first', async () => {
+    let fetches = 0;
+    const fetchPage = async (url) => {
+      fetches++;
+      return { status: 403, url, text: async () => '' };
+    };
+    const offers = [200, 210, 220, 90].map((price, i) => offer({ url: `https://s${i}.example/p/1`, price, match: 'equivalent' }));
+    const reads = new Map();
+    prefetchOffers(offers, reads, { fetchPage });
+    const tabbed = [];
+    await checkOffers(offers, { fetchPage, reads, dealPrice: 100, readInTab: async (url) => (tabbed.push(url), { state: 'blocked' }) });
+    assert.equal(fetches, 4, 'no second fetch for a prefetched page');
+    assert.equal(tabbed[0], 'https://s3.example/p/1', 'the $90 offer, under the $100 deal, is read first');
+    assert.equal(tabbed.length, 3);
   });
 });

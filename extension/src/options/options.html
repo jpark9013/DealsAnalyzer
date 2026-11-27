@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Deals Analyzer settings</title>
     <link rel="stylesheet" href="options.css" />
+    <!-- The panel's words, so saving a language can translate them ahead of time. -->
+    <script src="../content/strings.js"></script>
     <script type="module" src="options.js"></script>
   </head>
   <body>
@@ -57,6 +59,88 @@
           <label for="maxSearches">Web searches per deal (at most)</label>
           <input id="maxSearches" name="maxSearches" type="number" min="1" max="10" step="1" />
           <p class="hint">Each search costs $0.01. With Haiku, a typical analysis costs about $0.02–$0.07 in total.</p>
+        </section>
+
+        <section>
+          <label for="language-choice">Language</label>
+          <div class="row">
+            <select id="language-choice">
+              <option value="English">English</option>
+              <option value="Español">Español</option>
+              <option value="Français">Français</option>
+              <option value="Deutsch">Deutsch</option>
+              <option value="Português (Brasil)">Português (Brasil)</option>
+              <option value="Italiano">Italiano</option>
+              <option value="Nederlands">Nederlands</option>
+              <option value="Polski">Polski</option>
+              <option value="Русский">Русский</option>
+              <option value="Українська">Українська</option>
+              <option value="Türkçe">Türkçe</option>
+              <option value="العربية">العربية</option>
+              <option value="עברית">עברית</option>
+              <option value="हिन्दी">हिन्दी</option>
+              <option value="中文 (简体)">中文 (简体)</option>
+              <option value="中文 (繁體)">中文 (繁體)</option>
+              <option value="日本語">日本語</option>
+              <option value="한국어">한국어</option>
+              <option value="Tiếng Việt">Tiếng Việt</option>
+              <option value="Tagalog">Tagalog</option>
+              <option value="__other">Other…</option>
+            </select>
+            <input id="language-other" type="text" maxlength="40" placeholder="Any language, e.g. Kiswahili" hidden />
+          </div>
+          <p class="hint">
+            Claude writes its verdicts and answers in this language. The panel's labels and this page are translated
+            once when you save (a fraction of a cent), then kept. Prices are still compared at US stores, in dollars.
+          </p>
+        </section>
+
+        <section>
+          <label for="detail">Detail</label>
+          <select id="detail" name="detail">
+            <option value="detailed">Detailed — specs, compared offers, reasons to buy and skip (recommended)</option>
+            <option value="simple">Simple — just the rating and the price difference with the same item and an equivalent product</option>
+          </select>
+          <p class="hint">
+            Simple has Claude write a few dozen words instead of a few hundred, so the rating comes sooner and costs a
+            little less. Follow-up questions work in both.
+          </p>
+        </section>
+
+        <section>
+          <div class="check">
+            <input id="findDiscounts" name="findDiscounts" type="checkbox" />
+            <label for="findDiscounts">Find discounts: coupon codes, and student, military and other programs</label>
+          </div>
+          <p class="hint">
+            On by default. A separate search that runs alongside the analysis, so the rating isn't slowed. About
+            $0.02–$0.03 the first time for a store and brand, then free for 24 hours on any product from them.
+            Discounts come from the store's or brand's own pages and verification services (ID.me, SheerID, UNiDAYS);
+            dead pages are dropped, but codes and who qualifies aren't tested, so check at checkout.
+          </p>
+          <fieldset id="discountGroups">
+            <legend>I qualify for (searched first and marked "for you")</legend>
+            <label><input type="checkbox" value="student" /> Student</label>
+            <label><input type="checkbox" value="military" /> Military or veteran</label>
+            <label><input type="checkbox" value="teacher" /> Teacher</label>
+            <label><input type="checkbox" value="healthcare" /> Healthcare worker</label>
+            <label><input type="checkbox" value="first_responder" /> First responder</label>
+            <label><input type="checkbox" value="senior" /> Senior</label>
+          </fieldset>
+        </section>
+
+        <section>
+          <div class="check">
+            <input id="analyzeLists" name="analyzeLists" type="checkbox" />
+            <label for="analyzeLists">Rate every product on search and category pages</label>
+          </div>
+          <p class="hint">
+            Off by default. Puts a badge under each product on pages that list many (search results, categories, deal
+            lists) with its rating and how its price compares with the same item and an equivalent product elsewhere.
+            Products are rated as you scroll to them, 3 at a time and at most 40 per page, with the simple verdict and
+            up to 3 searches each: about $0.03 per product, so a page of 20 costs about $0.60. Products rated in the
+            last 24 hours are free. Click a badge for the full panel.
+          </p>
         </section>
 
         <section>
@@ -113,7 +197,9 @@
         runs the web searches. On a store page that includes up to 2,500 characters of the product section's text,
         with your name and delivery location removed. With automatic analysis on, this happens for every product page
         you view; turn it off and it happens only when you click. Compared stores' pages are read by your browser, and
-        only the prices go to Claude. Nothing else from your browsing is sent.
+        only the prices go to Claude. The discount search sends the product's name, brand, store and price; rating a
+        list page sends each product's name, price, link and a short excerpt of its tile. Translating sends only the
+        extension's own words. Nothing else from your browsing is sent.
       </p>
     </main>
   </body>

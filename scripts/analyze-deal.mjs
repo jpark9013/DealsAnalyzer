@@ -5,11 +5,15 @@
 //   npm run analyze -- <deal> "What would you buy instead?"   (adds a follow-up)
 // eDealinfo pages use its extractor; any other page uses the store-page one
 // (PAGE_URL tells a saved file where it came from, since adapters go by site).
-// Reads ANTHROPIC_API_KEY from .env; MODEL, EFFORT and MAX_SEARCHES override
-// the defaults. Calls the real API, so each run costs a few cents.
+// Reads ANTHROPIC_API_KEY from .env; MODEL, EFFORT, MAX_SEARCHES, LANGUAGE and
+// DETAIL=simple override the defaults, LIST=1 runs it as one product of a search
+// page, and DISCOUNTS=1 also runs the discount search (in parallel, as the
+// extension does; GROUPS=student,military says who the shopper is). Calls the
+// real API, so each run costs a few cents.
 import { readFileSync, existsSync } from 'node:fs';
 import { JSDOM, VirtualConsole } from 'jsdom';
 import { analyzeDeal, askFollowUp } from '../extension/src/background/claude.js';
+import { findDiscounts } from '../extension/src/background/discounts.js';
 import { sanitizeSettings } from '../extension/src/background/settings.js';
 
 try {
@@ -53,7 +57,11 @@ const settings = sanitizeSettings({
   apiKey: process.env.ANTHROPIC_API_KEY,
   model: process.env.MODEL,
   effort: process.env.EFFORT,
-  maxSearches: process.env.MAX_SEARCHES
+  maxSearches: process.env.MAX_SEARCHES,
+  language: process.env.LANGUAGE,
+  detail: process.env.DETAIL,
+  findDiscounts: process.env.DISCOUNTS === '1',
+  discountGroups: process.env.GROUPS ? process.env.GROUPS.split(',') : []
 });
 console.error(`Analyzing "${deal.title}" ($${deal.finalPrice ?? '?'}) with ${settings.model}, effort ${settings.effort}…`);
 
@@ -76,9 +84,29 @@ function progressLogger() {
 }
 
 let started = Date.now();
-const result = await analyzeDeal(deal, settings, { onProgress: progressLogger() });
+// As in the extension, the discount search starts once the analysis's searches are back.
+let discounts = null;
+const startDiscounts = () => {
+  if (!settings.findDiscounts || discounts) return;
+  discounts = findDiscounts(deal, settings).then(
+    (d) => {
+      console.error(`${((Date.now() - started) / 1000).toFixed(1).padStart(5)} s  discounts: ${d.discounts.length} found, $${d.usage.costUsd}`);
+      return d;
+    },
+    (err) => ({ error: err.message })
+  );
+};
+const logProgress = progressLogger();
+const result = await analyzeDeal(deal, settings, {
+  onProgress: (p) => {
+    logProgress(p);
+    if (p.stage && p.stage !== 'searching') startDiscounts();
+  },
+  list: process.env.LIST === '1'
+});
+startDiscounts();
 console.error(`Done in ${Math.round((Date.now() - started) / 1000)} s.`);
-const output = { deal: deal.title, price: deal.finalPrice, ...result };
+const output = { deal: deal.title, price: deal.finalPrice, ...result, discounts: await discounts };
 
 if (question) {
   console.error(`Follow-up: ${question}`);

@@ -12,6 +12,10 @@ test('is Manifest V3 and versioned with package.json', () => {
   assert.equal(manifest.version, pkg.version);
 });
 
+test('description fits the Chrome Web Store limit', () => {
+  assert.ok(manifest.description.length <= 132, `${manifest.description.length} characters; the store allows 132`);
+});
+
 test('every referenced file exists', () => {
   const files = [
     ...Object.values(manifest.icons),
@@ -34,7 +38,15 @@ test('content scripts run on every site, loading the extractors and panel before
   // One entry: main.js handles eDealinfo itself, and store product pages anywhere.
   assert.equal(manifest.content_scripts.length, 1);
   const [cs] = manifest.content_scripts;
-  assert.deepEqual(cs.js, ['src/content/extract.js', 'src/content/extract-page.js', 'src/content/panel.js', 'src/content/main.js']);
+  assert.deepEqual(cs.js, [
+    'src/content/strings.js',
+    'src/content/extract.js',
+    'src/content/extract-page.js',
+    'src/content/extract-list.js',
+    'src/content/panel.js',
+    'src/content/badges.js',
+    'src/content/main.js'
+  ]);
   assert.deepEqual(cs.matches, ['https://*/*', 'http://*/*']);
   assert.ok(!cs.all_frames, 'top-level pages only');
 });
@@ -56,7 +68,15 @@ test('asks only for what it uses', () => {
 test('the toolbar button injects every script the page needs, in order', async () => {
   const source = read('extension/src/background/service-worker.js');
   const list = source.match(/PAGE_SCRIPTS = \[([^\]]+)\]/)[1].match(/'([^']+)'/g).map((s) => s.slice(1, -1));
-  assert.deepEqual(list, ['src/content/extract.js', 'src/content/extract-page.js', 'src/content/panel.js', 'src/content/main.js']);
+  assert.deepEqual(list, [
+    'src/content/strings.js',
+    'src/content/extract.js',
+    'src/content/extract-page.js',
+    'src/content/extract-list.js',
+    'src/content/panel.js',
+    'src/content/badges.js',
+    'src/content/main.js'
+  ]);
   for (const file of list) assert.ok(exists(file), `missing ${file}`);
   assert.ok(manifest.commands._execute_action.suggested_key.default, 'has a keyboard shortcut');
 });

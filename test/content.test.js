@@ -116,12 +116,13 @@ describe('deal pages', () => {
     const priceText = root.querySelector('table').textContent;
     assert.match(priceText, /Equivalent products\$199\.9920% less/);
     assert.match(priceText, /Same item elsewhere\$179\.9911% less/);
+    // Prices read from the store's page come first, then the rest by price.
     assert.deepEqual(
       [...root.querySelectorAll('.offers .tag')].map((el) => el.textContent),
-      ['weaker specs', 'same item', 'equivalent', 'refurbished']
+      ['equivalent', 'refurbished', 'weaker specs', 'same item']
     );
-    assert.deepEqual([...root.querySelectorAll('.offers .store')].map((el) => el.textContent), ['Walmart', 'Best Buy', 'Newegg']);
-    assert.equal(root.querySelector('.offers .diff').textContent, 'VA panel, 165Hz');
+    assert.deepEqual([...root.querySelectorAll('.offers .store')].map((el) => el.textContent), ['Newegg', 'Walmart', 'Best Buy']);
+    assert.equal(root.querySelector('.offers .diff').textContent, 'No KVM; 180Hz vs 200Hz');
     assert.match(root.querySelector('footer').textContent, /Haiku 5\.5 · ~\$0\.023/);
 
     // Model text is inserted as text, never as markup.
@@ -438,7 +439,7 @@ describe('panel layout', () => {
 
 describe('store product pages', () => {
   const STORE_URL = 'https://computers.woot.com/offers/epos-adapt-160t-anc-usb-headset-0';
-  const SCRIPTS = ['extension/src/content/extract.js', 'extension/src/content/extract-page.js', 'extension/src/content/panel.js', 'extension/src/content/main.js'];
+  const SCRIPTS = CONTENT_SCRIPTS;
   const settle = () => flush(20);
   // Past the moment automatic analysis waits on a new page.
   const settleAuto = () => flush(1300);

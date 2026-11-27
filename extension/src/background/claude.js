@@ -1,11 +1,12 @@
 // Calls the Claude Messages API over plain fetch. The extension loads unpacked
 // with no build step, so the official SDK (which would need bundling) isn't used.
 
-import { MODELS } from './settings.js';
+import { MODELS, LIST_SEARCHES } from './settings.js';
 import { buildSystemPrompt, buildUserPrompt, buildFollowUpMessages, buildRecheckMessages } from './prompt.js';
-import { VERDICT_TOOL, revisionTool, normalizeVerdict, normalizeRating, extractJsonObject, parsePartialObject } from './verdict.js';
+import { VERDICT_TOOL, verdictTool, revisionTool, normalizeVerdict, normalizeSimpleVerdict, normalizeRating, extractJsonObject, parsePartialObject } from './verdict.js';
 import { estimateCost } from './pricing.js';
-import { checkOffers, modelTokens } from './pricecheck.js';
+import { checkOffers, prefetchOffers, modelTokens, foreignStore } from './pricecheck.js';
+import { assessConfidence, priceSupport } from './confidence.js';
 
 export const API_BASE = 'https://api.anthropic.com/v1';
 export const API_VERSION = '2026-10-21';
@@ -207,13 +208,28 @@ export function webSearchTool(model, maxSearches) {
   };
 }
 
-export function buildRequest(settings, now = new Date()) {
+/**
+ * How an analysis runs: `simple` writes only the rating and two prices, `list`
+ * is one product of many on a search page (fewer searches), and `savings`
+ * false leaves ways to pay less to the separate discount search.
+ */
+export function analysisMode(settings, { simple, list = false, savings } = {}) {
+  const isSimple = list || (simple ?? settings.detail === 'simple');
+  return {
+    simple: isSimple,
+    list,
+    savings: !isSimple && (savings ?? !settings.findDiscounts),
+    maxSearches: list ? Math.min(settings.maxSearches, LIST_SEARCHES) : settings.maxSearches
+  };
+}
+
+export function buildRequest(settings, now = new Date(), mode = analysisMode(settings, { simple: false, savings: true })) {
   const info = MODELS[settings.model];
   const body = {
     model: settings.model,
     max_tokens: MAX_TOKENS,
-    system: buildSystemPrompt({ now, maxSearches: settings.maxSearches }),
-    tools: [webSearchTool(settings.model, settings.maxSearches), VERDICT_TOOL],
+    system: buildSystemPrompt({ now, maxSearches: mode.maxSearches, simple: mode.simple, savings: mode.savings, language: settings.language }),
+    tools: [webSearchTool(settings.model, mode.maxSearches), mode.simple || !mode.savings ? verdictTool(mode) : VERDICT_TOOL],
     tool_choice: { type: 'auto' },
     output_config: { effort: settings.effort }
   };
@@ -231,7 +247,11 @@ export function urlKey(url) {
   }
 }
 
-function newResearch(knownSources = []) {
+function copyResearch(research) {
+  return { queries: [...research.queries], sources: new Map(research.sources) };
+}
+
+export function newResearch(knownSources = []) {
   const sources = new Map();
   for (const s of knownSources) {
     const key = urlKey(s.url);
@@ -262,7 +282,7 @@ function findVerdictInput(content) {
   return block ? block.input : null;
 }
 
-function textOf(content) {
+export function textOf(content) {
   return (content || [])
     .filter((b) => b.type === 'text')
     .map((b) => b.text)
@@ -282,7 +302,8 @@ function appendAssistant(messages, content) {
  * it's issued, what Claude is doing now, and the verdict's fields as they
  * arrive (a strict tool's input streams one whole field at a time).
  */
-function progressReporter(research, onProgress, fallbackPrice) {
+function progressReporter(research, onProgress, ctx) {
+  const fallbackPrice = ctx.fallbackPrice ?? null;
   let stage = 'searching';
   let verdictIndex = null;
   let fields = 0;
@@ -303,7 +324,10 @@ function progressReporter(research, onProgress, fallbackPrice) {
       const input = parsePartialObject(partialJson.get(event.index));
       if (!input || Object.keys(input).length === fields) return;
       fields = Object.keys(input).length;
-      partial = normalizeVerdict(input, { partial: true, fallbackPrice });
+      partial = ctx.mode?.simple
+        ? normalizeSimpleVerdict(input, { partial: true, fallbackPrice, deal: ctx.deal })
+        : normalizeVerdict(input, { partial: true, fallbackPrice });
+      if (partial.comparableOffers.length && ctx.onOffers) ctx.onOffers(partial, message);
     } else return;
 
     const live = message.content
@@ -317,7 +341,7 @@ function progressReporter(research, onProgress, fallbackPrice) {
  * Runs one assistant turn: sends the conversation, resumes server-side search
  * pauses, and appends Claude's reply to `messages`. Returns the reply content.
  */
-async function runTurn(messages, request, ctx) {
+export async function runTurn(messages, request, ctx) {
   const { settings, opts, research, usages } = ctx;
   const onProgress = opts.onProgress || (() => {});
   for (let i = 0; i <= MAX_CONTINUATIONS; i++) {
@@ -328,7 +352,7 @@ async function runTurn(messages, request, ctx) {
         ...opts,
         apiKey: settings.apiKey,
         betas: request.betas,
-        onEvent: progressReporter(research, onProgress, ctx.fallbackPrice ?? null)
+        onEvent: progressReporter(research, onProgress, ctx)
       }
     );
     if (response.usage) usages.push(response.usage);
@@ -351,7 +375,7 @@ async function runTurn(messages, request, ctx) {
 const squash = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
 // "www.bestbuy.com" -> "bestbuy"
-function siteName(url) {
+export function siteName(url) {
   try {
     const labels = new URL(url).hostname.split('.');
     return labels.length >= 2 ? labels[labels.length - 2] : labels[0];
@@ -387,11 +411,17 @@ export function linkOffers(offers, sources) {
 const NOT_STORES = new Set([
   'edealinfo', 'slickdeals', 'dealnews', 'bensbargains', 'bradsdeals', 'dealtikka', 'dealsea', 'techbargains', 'gottadeal',
   'dealcatcher', 'hip2save', 'krazycouponlady', 'retailmenot', 'offers', 'pricegrabber', 'shopzilla', 'camelcamelcamel',
-  'keepa', 'pricespy', 'idealo', 'shopperoo', 'pgrid', 'shopsavvy', 'nextag', 'pcpartpicker', 'rtings', 'reddit', 'youtube'
+  'keepa', 'pricespy', 'idealo', 'shopperoo', 'pgrid', 'shopsavvy', 'nextag', 'pcpartpicker', 'rtings', 'reddit', 'youtube',
+  // Reviews and news, whose deal articles quote prices that are often gone a day later.
+  'pcguide', 'tomsguide', 'tomshardware', 'cnet', 'theverge', 'engadget', 'zdnet', 'techradar', 'pcmag', 'nytimes', '9to5toys',
+  'bgr', 'mashable', 'ign', 'gamesradar', 'androidauthority', 'digitaltrends', 'forbes', 'businessinsider', 'usatoday', 'cnn',
+  'nbcnews', 'wired', 'pcworld', 'windowscentral', 'xda-developers', 'howtogeek', 'notebookcheck', 'displayninja', 'monitornerds'
 ]);
 // Where another listing of the same item is another seller's, not the same offer.
 const MARKETPLACES = new Set(['ebay']);
 const LISTING_PATH = /^\/(search|s|sch|b|browse|shop)(\/|$)|\/searchpage|\/search(\/|$)|^\/p\/pl$|^\/c\/kp\/|^\/category\/|^\/collections?\/[^/]+\/?$/i;
+// An article on any site: "/deals/ginormous-100-hisense-tv-sees-200-price-drop".
+const ARTICLE_PATH = /^\/(deals?|news|blog|articles?|reviews?|best|guides?|buying-guides?)\/[^/]+-[^/]+-[^/]+/i;
 const LISTING_QUERY = /[?&](q|k|st|query|_nkw|searchterm|keyword)=/i;
 
 function absoluteUrl(cited) {
@@ -406,14 +436,14 @@ function absoluteUrl(cited) {
 }
 
 /** The URL if it's a search result Claude saw; the host and path must match. */
-function seenUrl(cited, research) {
+export function seenUrl(cited, research) {
   const url = absoluteUrl(cited);
   return url && research.sources.has(urlKey(url.href)) ? url.href : null;
 }
 
 function isProductPage(href) {
   const { pathname, search } = new URL(href);
-  return !LISTING_PATH.test(pathname) && !LISTING_QUERY.test(search);
+  return !LISTING_PATH.test(pathname) && !ARTICLE_PATH.test(pathname) && !LISTING_QUERY.test(search);
 }
 
 // Search results often point at a product's reviews tab.
@@ -454,7 +484,7 @@ export function resolveOffers(verdict, deal, research) {
   for (const offer of verdict.comparableOffers) {
     const cited = seenUrl(offer.citedUrl, research);
     const href = cited && onStore(offer, cited) ? cited : linkOffers([{ ...offer }], sources)[0].url;
-    if (!href || NOT_STORES.has(siteName(href)) || !isProductPage(href)) {
+    if (!href || NOT_STORES.has(siteName(href)) || !isProductPage(href) || foreignStore(href)) {
       hidden++;
       continue;
     }
@@ -475,10 +505,12 @@ export function resolveOffers(verdict, deal, research) {
   };
 }
 
-function toVerdict(input, deal, research) {
+function toVerdict(input, deal, research, mode = {}) {
   let verdict;
   try {
-    verdict = normalizeVerdict(input, { fallbackPrice: deal.finalPrice });
+    verdict = mode.simple
+      ? normalizeSimpleVerdict(input, { fallbackPrice: deal.finalPrice, deal })
+      : normalizeVerdict(input, { fallbackPrice: deal.finalPrice });
   } catch (err) {
     throw new AnalysisError('bad_verdict', `Claude returned an unusable verdict: ${err.message}`);
   }
@@ -488,65 +520,123 @@ function toVerdict(input, deal, research) {
 // A price this far off is worth asking Claude to reconsider its rating over.
 const RECHECK_PCT = 0.05;
 
-function pricesThatMatter(checked) {
+const cheaperThanDeal = (offer, verdict) => typeof verdict.dealPrice === 'number' && typeof offer.price === 'number' && offer.price < verdict.dealPrice;
+
+// Does anything in the verdict cost less than the deal: an offer, or its stated prices?
+function hasLowerPrice(verdict) {
+  const deal = verdict.dealPrice;
+  if (typeof deal !== 'number') return true;
+  const below = (p) => typeof p === 'number' && p < deal;
+  return verdict.comparableOffers.some((o) => below(o.price)) || below(verdict.sameItemPrice) || below(verdict.equivalentMarketPrice);
+}
+
+function pricesThatMatter(checked, verdict) {
   const moved = checked.offers
     .filter((o) => o.check === 'changed' && o.quotedPrice !== null && Math.abs(o.price - o.quotedPrice) >= o.quotedPrice * RECHECK_PCT)
     .map((offer) => ({ offer, price: offer.price }));
-  const lost = checked.removed.filter((r) => r.reason !== 'wrong_product' && r.offer.price !== null);
+  // A page about another product says the link was wrong, not the price; it
+  // matters when it was one of the cheaper ones the rating may rest on.
+  const lost = checked.removed.filter((r) => r.offer.price !== null && (r.reason !== 'wrong_product' || cheaperThanDeal(r.offer, verdict)));
   return [...moved, ...lost];
+}
+
+// A simple verdict's prices are its offers': they follow what the pages say,
+// and go when the page is gone, sold out or about something else. A price with
+// no page at all stays, marked unconfirmed by confidence.js when it's lower.
+function syncSimplePrices(verdict, removed) {
+  const priceOf = (match, quoted) => {
+    if (removed.some((r) => r.offer.match === match)) return null;
+    const offer = verdict.comparableOffers.find((o) => o.match === match);
+    if (!offer) return quoted;
+    return offer.check === 'confirmed' || offer.check === 'changed' ? offer.price : quoted;
+  };
+  return {
+    ...verdict,
+    sameItemPrice: priceOf('same_item', verdict.sameItemPrice),
+    equivalentMarketPrice: priceOf('equivalent', verdict.equivalentMarketPrice)
+  };
+}
+
+/** Confidence, and which lower prices the store pages backed up (see confidence.js). */
+function withConfidence(verdict, ctx) {
+  return { ...verdict, ...assessConfidence(verdict, { searches: ctx.research.queries.length, dealPriceKnown: typeof ctx.deal?.finalPrice === 'number' }) };
 }
 
 /**
  * Checks the offers against their store pages, then has Claude look again if
- * they disagree with what it based the rating on. That turn gets the compact
- * verdict rather than the ~100K tokens of search results, so it costs a fraction
- * of a cent, and may only change the prices, rating and reasons.
+ * they disagree with what it based the rating on: a price moved, an offer is
+ * gone, or a lower price the rating rests on wasn't confirmed by any store page
+ * (search results are often weeks old). That turn gets the compact verdict
+ * rather than the ~100K tokens of search results, so it costs a fraction of a
+ * cent, runs at low effort, and may only change the prices, rating and reasons.
  */
 async function checkPrices(verdict, deal, ctx, { recheck = true } = {}) {
   const { opts, settings, research } = ctx;
-  if (!verdict.comparableOffers.length) return verdict;
+  const simple = Boolean(verdict.simple);
+  if (!verdict.comparableOffers.length && !recheck) return withConfidence(verdict, ctx);
   const report = (stage) => opts.onProgress?.({ stage, queries: research.queries, partial: verdict });
-  report('checking');
-  const checked = await checkOffers(verdict.comparableOffers, {
-    fetchPage: opts.fetchPage,
-    readInTab: opts.readInTab,
-    signal: opts.signal
-  });
-  const current = {
-    ...verdict,
-    comparableOffers: checked.offers,
-    offersHidden: verdict.offersHidden + checked.removed.length
-  };
-  const changes = pricesThatMatter(checked);
-  if (!recheck || !changes.length) return current;
+  let current = verdict;
+  let changes = [];
+  if (verdict.comparableOffers.length) {
+    report('checking');
+    const checked = await checkOffers(verdict.comparableOffers, {
+      fetchPage: opts.fetchPage,
+      readInTab: opts.readInTab,
+      signal: opts.signal,
+      reads: ctx.reads,
+      dealPrice: verdict.dealPrice
+    });
+    current = {
+      ...verdict,
+      comparableOffers: checked.offers,
+      offersHidden: verdict.offersHidden + checked.removed.length
+    };
+    if (simple) current = syncSimplePrices(current, checked.removed);
+    changes = pricesThatMatter(checked, verdict);
+  }
+  const support = priceSupport(current);
+  const unsupported = support.sameItem === 'unconfirmed' || support.equivalent === 'unconfirmed';
+  // Rated no, yet nothing it lists costs less: "cheaper elsewhere" with nothing to show for it.
+  const unbacked = (current.rating === 'no' || current.rating === 'strong_no') && !hasLowerPrice(current);
+  if (!recheck || (!changes.length && !unsupported && !unbacked)) return withConfidence(current, ctx);
 
   report('rechecking');
   try {
-    const request = buildRequest(settings, opts.now);
-    request.body.tools = [revisionTool()];
-    const content = await runTurn(buildRecheckMessages(deal, current, changes), request, {
+    const request = buildRequest(settings, opts.now, ctx.mode);
+    request.body.tools = [revisionTool({ simple })];
+    // Re-reading a short summary needs little thought.
+    request.body.output_config = { effort: 'low' };
+    const unconfirmed = unsupported ? current.comparableOffers.filter((o) => o.check === 'unverified' && cheaperThanDeal(o, current)) : null;
+    const content = await runTurn(buildRecheckMessages(deal, current, changes, unconfirmed, { unbacked }), request, {
       ...ctx,
       opts: { ...opts, onProgress: undefined }
     });
     const input = findVerdictInput(content);
-    if (!input) return current;
+    if (!input) return withConfidence(current, ctx);
+    if (simple) {
+      const rating = normalizeRating(input.rating);
+      return withConfidence(rating ? { ...current, rating, repriced: rating !== current.rating } : current, ctx);
+    }
     const revised = normalizeVerdict(input, { fallbackPrice: deal.finalPrice });
-    return {
-      ...revised,
-      seller: current.seller,
-      comparableOffers: current.comparableOffers,
-      savings: current.savings,
-      offersHidden: current.offersHidden,
-      repriced: revised.rating !== current.rating
-    };
+    return withConfidence(
+      {
+        ...revised,
+        seller: current.seller,
+        comparableOffers: current.comparableOffers,
+        savings: current.savings,
+        offersHidden: current.offersHidden,
+        repriced: revised.rating !== current.rating
+      },
+      ctx
+    );
   } catch (err) {
     if (err instanceof AnalysisError && err.code === 'aborted') throw err;
     // The offers are right either way; the rating just wasn't reconsidered.
-    return current;
+    return withConfidence(current, ctx);
   }
 }
 
-function requireKey(settings) {
+export function requireKey(settings) {
   if (!settings.apiKey) {
     throw new AnalysisError('no_key', 'Add your Anthropic API key in the extension settings to analyze deals.');
   }
@@ -559,9 +649,17 @@ function requireKey(settings) {
  */
 export async function analyzeDeal(deal, settings, opts = {}) {
   requireKey(settings);
-  const request = buildRequest(settings, opts.now);
+  const mode = analysisMode(settings, opts);
+  const request = buildRequest(settings, opts.now, mode);
   const messages = [{ role: 'user', content: buildUserPrompt(deal) }];
-  const ctx = { settings, opts, research: newResearch(), usages: [], fallbackPrice: deal.finalPrice };
+  const ctx = { settings, opts, mode, deal, research: newResearch(), usages: [], fallbackPrice: deal.finalPrice, reads: new Map() };
+  // Start reading the offers' store pages as soon as they stream in, while
+  // Claude is still writing the rest of the verdict.
+  ctx.onOffers = (partial, message) => {
+    const research = copyResearch(ctx.research);
+    collectResearch(message.content, research);
+    prefetchOffers(resolveOffers(partial, deal, research).comparableOffers, ctx.reads, { fetchPage: opts.fetchPage, signal: opts.signal });
+  };
 
   const verdictFrom = (content) => {
     const input = findVerdictInput(content);
@@ -579,7 +677,7 @@ export async function analyzeDeal(deal, settings, opts = {}) {
   if (!input) throw new AnalysisError('no_verdict', "Claude didn't return a verdict. Try re-analyzing.");
 
   return {
-    verdict: await checkPrices(toVerdict(input, deal, ctx.research), deal, ctx),
+    verdict: await checkPrices(toVerdict(input, deal, ctx.research, mode), deal, ctx),
     model: settings.model,
     queries: ctx.research.queries,
     sources: [...ctx.research.sources.values()].slice(0, MAX_SOURCES),
@@ -634,11 +732,13 @@ export async function askFollowUp(deal, question, settings, opts = {}) {
   const q = String(question || '').trim().slice(0, MAX_QUESTION_LENGTH);
   if (!q) throw new AnalysisError('no_question', 'Type a question first.');
 
-  const request = buildRequest(settings, opts.now);
+  // A follow-up keeps the shape of the verdict it's about.
+  const mode = analysisMode(settings, { simple: Boolean(opts.previousResult?.verdict?.simple), savings: Boolean(opts.previousResult?.verdict?.savings?.length) || !settings.findDiscounts });
+  const request = buildRequest(settings, opts.now, mode);
   const messages = buildFollowUpMessages(deal, opts.previousResult, opts.turns || [], q);
   // The earlier offers' pages count as seen; the source list kept with a verdict is cut short.
   const known = [...(opts.previousResult?.sources || []), ...(opts.previousResult?.verdict?.comparableOffers || [])];
-  const ctx = { settings, opts, research: newResearch(known.filter((s) => s.url)), usages: [], fallbackPrice: deal.finalPrice };
+  const ctx = { settings, opts, mode, deal, research: newResearch(known.filter((s) => s.url)), usages: [], fallbackPrice: deal.finalPrice, reads: new Map() };
 
   let content = await runTurn(messages, request, ctx);
   const input = findVerdictInput(content);
@@ -654,7 +754,7 @@ export async function askFollowUp(deal, question, settings, opts = {}) {
     answer = answerFrom(content);
   }
   // No second opinion here: Claude has just told the shopper what it thinks.
-  const verdict = input ? await checkPrices(toVerdict(input, deal, ctx.research), deal, ctx, { recheck: false }) : null;
+  const verdict = input ? await checkPrices(toVerdict(input, deal, ctx.research, mode), deal, ctx, { recheck: false }) : null;
   if (!answer.text && !verdict) throw new AnalysisError('no_answer', "Claude didn't answer. Try asking again.");
 
   return {

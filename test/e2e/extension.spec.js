@@ -62,16 +62,40 @@ const FOLLOW_UP_REPLY = {
   ]
 };
 
+const DISCOUNT_REPLY = {
+  id: 'msg_e2e_d',
+  type: 'message',
+  role: 'assistant',
+  model: 'claude-haiku-5-5',
+  stop_reason: 'tool_use',
+  usage: { input_tokens: 4000, output_tokens: 120, server_tool_use: { web_search_requests: 1 } },
+  content: [
+    { type: 'server_tool_use', id: 'srv_d', name: 'web_search', input: { query: 'Amazon student discount' } },
+    {
+      type: 'web_search_tool_result',
+      tool_use_id: 'srv_d',
+      content: [{ type: 'web_search_result', url: 'https://www.amazon.com/primestudent', title: 'Prime Student', encrypted_content: 'x' }]
+    },
+    {
+      type: 'tool_use',
+      id: 'toolu_d',
+      name: 'submit_discounts',
+      input: { found: [{ who: 'student', offer: 'Prime Student: 6 months free, then half price', code: 'STUDENT6', url: 'https://www.amazon.com/primestudent' }] }
+    }
+  ]
+};
+
 // Serve saved eDealinfo pages, block everything else on the web, and replace
 // the service worker's fetch so API calls are recorded instead of sent.
 // Follow-up questions (which carry the earlier verdict) get their own reply.
-async function setUp(context, serviceWorker, { apiKey = 'sk-ant-e2e-dummy', pages = {}, checkInTabs = false, apiReply = API_REPLY } = {}) {
+// The discount search is off unless a test turns it on, so each test counts only its own requests.
+async function setUp(context, serviceWorker, { apiKey = 'sk-ant-e2e-dummy', pages = {}, checkInTabs = false, apiReply = API_REPLY, settings: extra = { findDiscounts: false } } = {}) {
   await context.route(/^https?:\/\//, (route) => {
     const html = pages[route.request().url()];
     return html ? route.fulfill({ contentType: 'text/html; charset=utf-8', body: html }) : route.abort();
   });
   await serviceWorker.evaluate(
-    async ({ reply, followUp, apiKey: key, checkInTabs: inTabs }) => {
+    async ({ reply, followUp, discounts, apiKey: key, checkInTabs: inTabs, extra: more }) => {
       self.__apiCalls = [];
       self.fetch = async (url, init) => {
         // A store page, for the price check: every store refuses.
@@ -79,14 +103,30 @@ async function setUp(context, serviceWorker, { apiKey = 'sk-ant-e2e-dummy', page
         const body = JSON.parse(init.body);
         self.__apiCalls.push({ url: String(url), headers: init.headers, body });
         const isFollowUp = JSON.stringify(body.messages[0].content).includes('<your_verdict>');
-        return new Response(isFollowUp ? followUp : reply, {
+        const isDiscounts = (body.tools || []).some((t) => t.name === 'submit_discounts');
+        if (!body.tools) {
+          // A translation of the extension's own words: each numbered line comes back marked.
+          const text = body.messages[0].content.replace(/^(\d+)\. /gm, '$1. [es] ');
+          const events = [
+            { type: 'message_start', message: { id: 'msg_t', type: 'message', role: 'assistant', content: [], usage: { input_tokens: 1 } } },
+            { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+            { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text } },
+            { type: 'content_block_stop', index: 0 },
+            { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } }
+          ];
+          return new Response(events.map((e) => `event: ${e.type}\ndata: ${JSON.stringify(e)}\n\n`).join(''), {
+            status: 200,
+            headers: { 'content-type': 'text/event-stream' }
+          });
+        }
+        return new Response(isDiscounts ? discounts : isFollowUp ? followUp : reply, {
           status: 200,
           headers: { 'content-type': 'text/event-stream' }
         });
       };
-      await chrome.storage.local.set({ settings: key ? { apiKey: key, checkInTabs: inTabs } : {} });
+      await chrome.storage.local.set({ settings: key ? { apiKey: key, checkInTabs: inTabs, ...more } : {} });
     },
-    { reply: sseFromMessage(apiReply), followUp: sseFromMessage(FOLLOW_UP_REPLY), apiKey, checkInTabs }
+    { reply: sseFromMessage(apiReply), followUp: sseFromMessage(FOLLOW_UP_REPLY), discounts: sseFromMessage(DISCOUNT_REPLY), apiKey, checkInTabs, extra }
   );
 }
 
@@ -369,5 +409,93 @@ test('with auto-analyze off, store pages get the Deal check tab, which analyzes 
   await page.reload();
   await expect(tab).toHaveText('Strong yes');
   expect(await apiCalls(serviceWorker)).toHaveLength(1);
+});
+
+test('finds discounts alongside the verdict: codes to copy, and programs marked for the shopper', async ({ context, serviceWorker }) => {
+  const STORE_URL = 'https://computers.woot.com/offers/epos-adapt-160t-anc-usb-headset-0';
+  await setUp(context, serviceWorker, {
+    pages: { [STORE_URL]: fixture('store-woot-headset') },
+    settings: { findDiscounts: true, discountGroups: ['student'] }
+  });
+  const page = await context.newPage();
+  await page.goto(STORE_URL);
+
+  const panel = page.locator('#deals-analyzer-root');
+  await expect(panel.locator('.pill')).toHaveText('Strong yes');
+  const discounts = panel.locator('.discounts');
+  await expect(discounts.locator('li')).toHaveCount(1);
+  await expect(discounts.locator('li')).toContainText('Prime Student: 6 months free, then half price');
+  await expect(discounts.locator('.mine')).toContainText('for you');
+  await expect(discounts.locator('code')).toHaveText('STUDENT6');
+  await expect(discounts.locator('li a')).toHaveAttribute('href', 'https://www.amazon.com/primestudent');
+
+  // Its own request, with its own small tool, after the analysis's.
+  const calls = await apiCalls(serviceWorker);
+  expect(calls).toHaveLength(2);
+  expect(calls[1].body.tools.map((t) => t.name)).toEqual(['web_search', 'submit_discounts']);
+  expect(calls[1].body.system).toContain('The shopper qualifies as: students');
+  // The verdict leaves ways to pay less to it.
+  expect(calls[0].body.tools[1].input_schema.properties).not.toHaveProperty('savings');
+
+  // Another visit within the day costs nothing, discounts included.
+  await page.reload();
+  await expect(discounts.locator('code')).toHaveText('STUDENT6');
+  expect(await apiCalls(serviceWorker)).toHaveLength(2);
+});
+
+test('with list mode on, a search page gets a rating under each product, and a badge opens the panel', async ({ context, serviceWorker }) => {
+  const LIST_URL = 'https://shop.example.com/search?q=monitor';
+  const tile = (i, price) =>
+    `<li class="card"><a href="/p/monitor-${i}"><img alt="Example 27in Monitor Model ${i}" src="data:,"></a>` +
+    `<a class="name" href="/p/monitor-${i}">Example 27in QHD Monitor Model ${i}</a><span class="price">$${price}.99</span></li>`;
+  const listPage = `<!doctype html><html><head><title>Search: monitor</title></head><body><h1>Results</h1><ul class="grid">${[1, 2, 3]
+    .map((i) => tile(i, 100 + i * 10))
+    .join('')}</ul></body></html>`;
+  await setUp(context, serviceWorker, { pages: { [LIST_URL]: listPage }, settings: { findDiscounts: false, analyzeLists: true } });
+  const page = await context.newPage();
+  await page.goto(LIST_URL);
+
+  // The badges sit in each product's card, in their own shadow roots.
+  const badges = page.locator('[data-deals-analyzer="badge"] .badge');
+  await expect(badges).toHaveCount(3);
+  await expect(badges.first().locator('.pill')).toHaveText('Strong yes', { timeout: 15_000 });
+  await expect(badges.nth(2).locator('.pill')).toHaveText('Strong yes');
+
+  // One simple request per product, with fewer searches and the short verdict.
+  const calls = await apiCalls(serviceWorker);
+  expect(calls).toHaveLength(3);
+  for (const call of calls) {
+    expect(call.body.tools[0].max_uses).toBe(3);
+    expect(Object.keys(call.body.tools[1].input_schema.properties)).toEqual(['deal_price', 'same_price', 'same_url', 'equiv_product', 'equiv_price', 'equiv_url', 'rating']);
+  }
+
+  await badges.first().click();
+  const panel = page.locator('#deals-analyzer-root');
+  await expect(panel.locator('aside')).toBeVisible();
+  await expect(panel.locator('.deal-title')).toHaveText('Example 27in QHD Monitor Model 1');
+  await expect(panel.locator('.pill')).toHaveText('Strong yes');
+  expect(await apiCalls(serviceWorker)).toHaveLength(3);
+});
+
+test('a language saved in the settings translates the settings page and the panel', async ({ context, serviceWorker, extensionId }) => {
+  await setUp(context, serviceWorker, { pages: { [DEAL_URL]: fixture('detail-amazon-monitor') } });
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/src/options/options.html`);
+  await options.locator('#language-choice').selectOption('__other');
+  await options.locator('#language-other').fill('Español');
+  await options.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(options.locator('#save-status')).toHaveText('Saved.');
+  await expect(options.locator('h1')).toHaveText('[es] Deals Analyzer');
+
+  const page = await context.newPage();
+  await page.goto(DEAL_URL);
+  const panel = page.locator('#deals-analyzer-root');
+  await expect(panel.locator('.pill')).toHaveText('[es] Strong yes');
+  await expect(panel.locator('header .brand')).toHaveText('[es] Deal check');
+  const calls = await apiCalls(serviceWorker);
+  // Claude is asked to write in the language too.
+  expect(calls.at(-1).body.system).toContain('Write all text (verdict fields and answers) in Español.');
+  // The settings page and the panel were each translated once, on saving; the deal page asked for nothing new.
+  expect(calls.filter((c) => !c.body.tools)).toHaveLength(2);
 });
 

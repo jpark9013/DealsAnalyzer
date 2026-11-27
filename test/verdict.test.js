@@ -61,7 +61,8 @@ describe('VERDICT_TOOL schema', () => {
     // The rating is measured against the prices; putting the long lists after
     // it gets the rating to the panel seconds sooner.
     const order = Object.keys(VERDICT_TOOL.input_schema.properties);
-    assert.deepEqual(order, ['specs', 'seller', 'deal_price', 'same_item_price', 'lowest_price', 'equivalent_price', 'rating', 'confidence', 'headline', 'offers', 'savings', 'pros', 'cons']);
+    // No confidence: Claude said "medium" nearly every time, so confidence.js works it out.
+    assert.deepEqual(order, ['specs', 'seller', 'deal_price', 'same_item_price', 'lowest_price', 'equivalent_price', 'rating', 'headline', 'offers', 'savings', 'pros', 'cons']);
     assert.deepEqual(VERDICT_TOOL.input_schema.properties.offers.items.properties.match.enum, MATCHES);
   });
 
@@ -87,8 +88,9 @@ describe('VERDICT_TOOL schema', () => {
   });
 
   test('matches the ratings the panel knows how to display', () => {
-    const dom = makeDom('<!doctype html><html></html>', { scripts: ['extension/src/content/panel.js'] });
-    assert.deepEqual(Object.keys(plain(dom.window.DealsAnalyzer.RATING_LABELS)), RATINGS);
+    const dom = makeDom('<!doctype html><html></html>', { scripts: ['extension/src/content/strings.js'] });
+    const keys = plain(dom.window.DealsAnalyzer.STRING_KEYS);
+    assert.deepEqual(keys.filter((k) => /^r_/.test(k)).map((k) => k.slice(2)), RATINGS);
     dom.window.close();
   });
 });
@@ -107,7 +109,7 @@ describe('normalizeVerdict', () => {
     });
     assert.deepEqual(v, {
       rating: 'yes',
-      confidence: 'medium',
+      confidence: null,
       headline: 'Good price.',
       keySpecs: ['i5-9500T (9th gen)', '8GB RAM'],
       seller: null,
@@ -158,7 +160,8 @@ describe('normalizeVerdict', () => {
       },
       { fallbackPrice: 77 }
     );
-    assert.equal(v.confidence, 'low');
+    // Whatever Claude says about it: confidence is worked out after the price check.
+    assert.equal(v.confidence, null);
     assert.equal(v.headline, 'No summary provided.');
     assert.equal(v.dealPrice, 77);
     assert.equal(v.equivalentMarketPrice, 1299.5);

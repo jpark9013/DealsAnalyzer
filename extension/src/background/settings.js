@@ -32,8 +32,36 @@ export const DEFAULT_SETTINGS = {
   // The panel on store product pages. Off hides it there; the toolbar button still works.
   showOnStores: true,
   // Stores that block the background price check get opened in a background tab instead.
-  checkInTabs: true
+  checkInTabs: true,
+  // What Claude writes in, and the panel's labels (translated once, then kept).
+  language: 'English',
+  // 'simple': just the rating and the price difference with the same and an
+  // equivalent product, which is less for Claude to write, so faster and cheaper.
+  detail: 'detailed',
+  // Search and category pages: a rating under every product shown. Costs per product.
+  analyzeLists: false,
+  // A separate, parallel search for coupon codes and student, military and other programs.
+  findDiscounts: true,
+  // Groups the shopper belongs to, so the discount search looks for theirs.
+  discountGroups: []
 };
+
+export const DETAILS = ['detailed', 'simple'];
+// Who a discount is for. The shopper can say which of the groups apply to them.
+export const DISCOUNT_GROUPS = ['student', 'military', 'teacher', 'healthcare', 'first_responder', 'senior'];
+// Searches per product on a page that lists many: enough for the item and one rival.
+export const LIST_SEARCHES = 3;
+
+// A language name in any script ("Español", "한국어", "Brazilian Portuguese").
+// It's put into the prompt, so it's held to letters and a little punctuation.
+const LANGUAGE_RE = /^[\p{L}\p{M}][\p{L}\p{M} ()'.,-]{0,39}$/u;
+
+export function sanitizeLanguage(value) {
+  const name = typeof value === 'string' ? value.replace(/\s+/g, ' ').trim() : '';
+  return LANGUAGE_RE.test(name) ? name : 'English';
+}
+
+export const isEnglish = (language) => /^english\b/i.test(language || 'English');
 
 export const MIN_SEARCHES = 1;
 export const MAX_SEARCHES = 10;
@@ -51,7 +79,12 @@ export function sanitizeSettings(raw) {
       : DEFAULT_SETTINGS.maxSearches,
     autoAnalyze: s.autoAnalyze !== false,
     showOnStores: s.showOnStores !== false,
-    checkInTabs: s.checkInTabs !== false
+    checkInTabs: s.checkInTabs !== false,
+    language: sanitizeLanguage(s.language),
+    detail: DETAILS.includes(s.detail) ? s.detail : DEFAULT_SETTINGS.detail,
+    analyzeLists: s.analyzeLists === true,
+    findDiscounts: s.findDiscounts !== false,
+    discountGroups: [...new Set(Array.isArray(s.discountGroups) ? s.discountGroups : [])].filter((g) => DISCOUNT_GROUPS.includes(g))
   };
 }
 
@@ -64,4 +97,13 @@ export async function saveSettings(storage, settings) {
   const clean = sanitizeSettings(settings);
   await storage.set({ settings: clean });
   return clean;
+}
+
+/**
+ * What a stored verdict depends on besides the deal: the model, how much it
+ * writes, and its language. Cached results are kept apart by it.
+ */
+export function profileOf(settings, { simple = settings.detail === 'simple' } = {}) {
+  const lang = isEnglish(settings.language) ? '' : `:${settings.language.toLowerCase()}`;
+  return `${settings.model}:${simple ? 'simple' : 'detailed'}${lang}`;
 }

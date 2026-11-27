@@ -179,3 +179,24 @@ a {
 .privacy {
   margin-top: 28px;
 }
+
+fieldset {
+  margin: 10px 0 0;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+fieldset legend {
+  font-size: 13px;
+  color: var(--muted);
+  padding: 0 4px;
+}
+fieldset label {
+  font-weight: 400;
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+}

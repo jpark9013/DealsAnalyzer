@@ -14,7 +14,20 @@ describe('settings', () => {
   test('clamps and repairs bad values', () => {
     assert.deepEqual(
       sanitizeSettings({ apiKey: '  sk-ant-x \n', model: 'gpt-9', effort: 'max', maxSearches: '99', autoAnalyze: 'no' }),
-      { apiKey: 'sk-ant-x', model: 'claude-haiku-5-5', effort: 'medium', maxSearches: 10, autoAnalyze: true, showOnStores: true, checkInTabs: true }
+      {
+        apiKey: 'sk-ant-x',
+        model: 'claude-haiku-5-5',
+        effort: 'medium',
+        maxSearches: 10,
+        autoAnalyze: true,
+        showOnStores: true,
+        checkInTabs: true,
+        language: 'English',
+        detail: 'detailed',
+        analyzeLists: false,
+        findDiscounts: true,
+        discountGroups: []
+      }
     );
     assert.equal(sanitizeSettings({ maxSearches: 0 }).maxSearches, 1);
     assert.equal(sanitizeSettings({ maxSearches: 'abc' }).maxSearches, DEFAULT_SETTINGS.maxSearches);
@@ -88,7 +101,7 @@ describe('verdict cache', () => {
     const storage = memoryStorage({ settings: { apiKey: 'k' } });
     await putCached(storage, 'old', 'm', result, 0);
     await putCached(storage, 'new', 'm', result, CACHE_TTL_MS + 10);
-    assert.deepEqual(Object.keys(storage.data).sort(), ['settings', 'verdict:v3:m:new']);
+    assert.deepEqual(Object.keys(storage.data).sort(), ['settings', 'verdict:v4:m:new']);
     assert.equal(await pruneCache(storage, 0, { all: true }), 1);
     assert.deepEqual(Object.keys(storage.data), ['settings']);
   });

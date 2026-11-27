@@ -34,6 +34,13 @@
   // Counts what's been put in the panel, so a slower, older setup can't
   // overwrite a newer one (say, the toolbar button's analysis).
   let shown = 0;
+  // The settings as last read, for what follows an analysis (discounts).
+  let lastStatus = null;
+  let listWatcher = null;
+  // Discounts: their own request, alongside the analysis.
+  let discountPort = null;
+  let discountsFor = null;
+  const t = (key, vars) => ns.t(key, vars);
 
   function openSettings() {
     ext.runtime.sendMessage({ type: 'open-options' }).catch(() => {});
@@ -58,11 +65,83 @@
   }
 
   async function getStatus() {
+    let status;
     try {
-      return (await ext.runtime.sendMessage({ type: 'get-status' })) || { hasKey: false, autoAnalyze: false };
+      status = (await ext.runtime.sendMessage({ type: 'get-status' })) || { hasKey: false, autoAnalyze: false };
     } catch {
-      return { hasKey: false, autoAnalyze: false };
+      status = { hasKey: false, autoAnalyze: false };
     }
+    lastStatus = status;
+    loadStrings(status);
+    return status;
+  }
+
+  // The panel's words in the shopper's language: translated once by the
+  // background, then kept. English until they arrive.
+  let stringsRequested = false;
+  function loadStrings(status) {
+    if (status.english !== false || stringsRequested || !ns.setStrings) return;
+    stringsRequested = true;
+    ext.runtime
+      .sendMessage({ type: 'translate', texts: ns.STRING_KEYS.map((key) => ns.STRINGS[key]) })
+      .then((reply) => {
+        if (!reply?.texts) return;
+        ns.setStrings(reply.texts);
+        if (panel) panel.relabel();
+        if (listWatcher) listWatcher.relabel();
+        document.querySelectorAll(`button[${MARK}="button"]`).forEach((b) => (b.textContent = t('popup_button')));
+      })
+      .catch(() => {});
+  }
+
+  function stopDiscounts() {
+    if (discountPort) {
+      try {
+        discountPort.disconnect();
+      } catch {
+        // already closed
+      }
+    }
+    discountPort = null;
+    discountsFor = null;
+    if (panel) panel.setDiscounts(null);
+  }
+
+  // Coupon codes and student, military and other programs for this store and
+  // brand. Kept per store and brand, so usually free after the first product.
+  function requestDiscounts(deal) {
+    const status = lastStatus;
+    if (!deal || !panel || !status?.hasKey || !status.findDiscounts || discountsFor === deal.key) return;
+    stopDiscounts();
+    discountsFor = deal.key;
+    const groups = status.discountGroups || [];
+    panel.setDiscounts({ state: 'loading' });
+    const thisPort = ext.runtime.connect({ name: 'deal-analysis' });
+    discountPort = thisPort;
+    const ping = setInterval(() => {
+      try {
+        thisPort.postMessage({ type: 'ping' });
+      } catch {
+        // disconnected
+      }
+    }, PING_MS);
+    const finish = (next) => {
+      clearInterval(ping);
+      if (thisPort !== discountPort) return;
+      discountPort = null;
+      try {
+        thisPort.disconnect();
+      } catch {
+        // already closed
+      }
+      panel.setDiscounts(next);
+    };
+    thisPort.onMessage.addListener((msg) => {
+      if (msg?.type === 'discounts') finish(msg.result ? { state: 'done', items: msg.result.discounts || [], groups } : null);
+      else if (msg?.type === 'error') finish({ state: 'error', error: msg.error });
+    });
+    thisPort.onDisconnect.addListener(() => finish({ state: 'error', error: { message: t('disconnected') } }));
+    thisPort.postMessage({ type: 'discounts', deal });
   }
 
   function disconnect() {
@@ -107,7 +186,7 @@
     thisPort.onDisconnect.addListener(() => {
       if (thisPort !== port) return;
       disconnect();
-      onError({ code: 'disconnected', message: 'Lost the connection to the extension. Try again.' });
+      onError({ code: 'disconnected', message: t('disconnected') });
     });
     thisPort.postMessage(message);
   }
@@ -117,11 +196,21 @@
     analyzeOnExpand = false;
     const p = ensurePanel();
     p.showLoading();
+    // The discount search starts once the analysis's own searches are back:
+    // searches sent side by side slowed each other down (the first came back
+    // in 7 s instead of 3 in a live run), and the rating matters more.
+    const discountsNext = () => requestDiscounts(deal);
     request(
       { type: 'analyze', deal, force: Boolean(force) },
       {
-        onProgress: (progress) => p.updateProgress(progress),
-        onDone: (msg) => p.showResult(msg.result),
+        onProgress: (progress) => {
+          p.updateProgress(progress);
+          if (progress.stage && progress.stage !== 'searching') discountsNext();
+        },
+        onDone: (msg) => {
+          p.showResult(msg.result);
+          discountsNext();
+        },
         onError: (error) => p.showError(error)
       }
     );
@@ -154,6 +243,7 @@
 
   async function present(deal, { expand = false, status: knownStatus = null } = {}) {
     shown++;
+    if (currentDeal?.key !== deal.key) stopDiscounts();
     currentDeal = deal;
     const p = ensurePanel();
     p.setDeal(deal);
@@ -175,7 +265,7 @@
 
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'Is this a good deal? Analyze';
+    button.textContent = t('popup_button');
     button.setAttribute(MARK, 'button');
     button.style.cssText =
       'margin:4px 0 8px;padding:4px 12px;border:0;border-radius:6px;background:#1f6feb;color:#fff;' +
@@ -241,7 +331,7 @@
       .then((stored) => p.show({ collapsed: false, layout: stored.panelLayout || null }));
     p.showError({
       code: 'no_product',
-      message: "Couldn't find a product with a price on this page. Open the product's own page, then try again."
+      message: t('no_product')
     });
   };
 
@@ -271,6 +361,7 @@
     const status = await getStatus();
     if (status.showOnStores === false || status.helperTab || mine !== shown) return;
     disconnect(); // a request for the previous product's panel
+    stopDiscounts();
     currentDeal = deal;
     analyzeOnExpand = false;
     const p = ensurePanel();
@@ -289,6 +380,7 @@
     if (mine !== shown) return; // the shopper moved on meanwhile
     if (cached) {
       p.showResult(cached);
+      requestDiscounts(deal);
       return;
     }
     p.showIdle();
@@ -325,13 +417,43 @@
     setInterval(check, URL_CHECK_MS);
   }
 
+  // A product rated from a list page's badge, shown in the full panel.
+  async function openFromBadge(deal, result) {
+    shown++;
+    disconnect();
+    if (currentDeal?.key !== deal.key) stopDiscounts();
+    currentDeal = deal;
+    const p = ensurePanel();
+    p.setDeal(deal);
+    const stored = await ext.storage.local.get('panelLayout').catch(() => ({}));
+    p.show({ collapsed: false, layout: stored.panelLayout || null });
+    p.showResult(result);
+    requestDiscounts(deal);
+  }
+
+  const isProductPage = () =>
+    onEdealinfo
+      ? /^\/d\//.test(location.pathname) || Boolean(document.querySelector(POPUP_SELECTOR))
+      : Boolean(ns.extractPageDeal?.(document, { url: location.href, strict: true }));
+
+  // Search and category pages: a rating under every product, when the shopper
+  // turned that on. Starts once the tab is viewed, like the automatic analysis.
+  async function watchLists() {
+    if (!ns.watchListPage || !ns.extractListDeals) return;
+    const status = await getStatus();
+    if (!status.analyzeLists || !status.hasKey || status.helperTab || (!onEdealinfo && status.showOnStores === false)) return;
+    await whenViewed();
+    if (!listWatcher) listWatcher = ns.watchListPage({ ext, isProductPage, onOpen: openFromBadge });
+  }
+
   if (onEdealinfo) {
     if (/^\/d\//.test(location.pathname)) {
       const deal = ns.extractDeal(document, { url: location.href });
       if (deal) present(deal);
-    }
+    } else watchLists();
     watchPopups();
   } else if (ns.extractPageDeal) {
     watchStorePages();
+    watchLists();
   }
 })(globalThis);

@@ -1,4 +1,4 @@
-import { MODELS, loadSettings, saveSettings } from '../background/settings.js';
+import { MODELS, loadSettings, saveSettings, isEnglish } from '../background/settings.js';
 import { testApiKey } from '../background/claude.js';
 import { pruneCache } from '../background/cache.js';
 
@@ -16,6 +16,20 @@ function setStatus(el, message, kind) {
   el.className = `status${kind ? ` ${kind}` : ''}`;
 }
 
+const groupBoxes = () => [...document.querySelectorAll('#discountGroups input[type="checkbox"]')];
+
+function readLanguage() {
+  const choice = $('language-choice').value;
+  return choice === '__other' ? $('language-other').value : choice;
+}
+
+function showLanguage(language) {
+  const known = [...$('language-choice').options].some((o) => o.value === language);
+  $('language-choice').value = known ? language : '__other';
+  $('language-other').value = known ? '' : language;
+  $('language-other').hidden = known;
+}
+
 function readForm() {
   return {
     apiKey: $('apiKey').value,
@@ -24,7 +38,12 @@ function readForm() {
     maxSearches: $('maxSearches').value,
     autoAnalyze: $('autoAnalyze').checked,
     showOnStores: $('showOnStores').checked,
-    checkInTabs: $('checkInTabs').checked
+    checkInTabs: $('checkInTabs').checked,
+    language: readLanguage(),
+    detail: $('detail').value,
+    findDiscounts: $('findDiscounts').checked,
+    discountGroups: groupBoxes().filter((b) => b.checked).map((b) => b.value),
+    analyzeLists: $('analyzeLists').checked
   };
 }
 
@@ -36,6 +55,48 @@ function fillForm(settings) {
   $('autoAnalyze').checked = settings.autoAnalyze;
   $('showOnStores').checked = settings.showOnStores;
   $('checkInTabs').checked = settings.checkInTabs;
+  showLanguage(settings.language);
+  $('detail').value = settings.detail;
+  $('findDiscounts').checked = settings.findDiscounts;
+  for (const box of groupBoxes()) box.checked = settings.discountGroups.includes(box.value);
+  $('analyzeLists').checked = settings.analyzeLists;
+}
+
+// --- This page in the chosen language -------------------------------------
+// Elements holding only text (labels, options, headings, plain hints) are
+// translated; ones mixing text with links or emphasis stay in English rather
+// than be stitched from fragments. The language names in the list are left
+// as they are, written in their own language.
+const english = new Map();
+
+function translatable() {
+  const out = [];
+  for (const el of document.querySelectorAll('main *')) {
+    if (el.closest('#language-choice, .status, script, style, kbd, code')) continue;
+    if (el.children.length || !el.textContent.trim()) continue;
+    out.push(el);
+  }
+  return out;
+}
+
+async function translatePage(language) {
+  const els = translatable();
+  for (const el of els) if (!english.has(el)) english.set(el, el.textContent);
+  if (isEnglish(language)) {
+    for (const [el, text] of english) el.textContent = text;
+    document.documentElement.lang = 'en';
+    return;
+  }
+  const reply = await ext.runtime.sendMessage({ type: 'translate', texts: els.map((el) => english.get(el).replace(/\s+/g, ' ').trim()) });
+  if (!reply?.texts) throw new Error(reply?.error?.message || 'Translation failed.');
+  els.forEach((el, i) => (el.textContent = reply.texts[i]));
+}
+
+// The panel's words too, so the first product page doesn't wait for them.
+async function translatePanel() {
+  const ns = globalThis.DealsAnalyzer;
+  if (!ns?.STRINGS) return;
+  await ext.runtime.sendMessage({ type: 'translate', texts: ns.STRING_KEYS.map((key) => ns.STRINGS[key]) });
 }
 
 async function checkPermissions() {
@@ -49,13 +110,31 @@ async function init() {
   for (const [id, info] of Object.entries(MODELS)) {
     $('model').append(new Option(info.label, id));
   }
-  fillForm(await loadSettings(storage));
+  const initial = await loadSettings(storage);
+  fillForm(initial);
   await checkPermissions();
+  if (!isEnglish(initial.language)) translatePage(initial.language).catch(() => {});
+
+  $('language-choice').addEventListener('change', () => {
+    const other = $('language-choice').value === '__other';
+    $('language-other').hidden = !other;
+    if (other) $('language-other').focus();
+  });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault();
+    const before = await loadSettings(storage);
     const saved = await saveSettings(storage, readForm());
     fillForm(saved);
+    if (saved.language !== before.language || (!isEnglish(saved.language) && saved.apiKey && !before.apiKey)) {
+      if (!isEnglish(saved.language) && saved.apiKey) setStatus($('save-status'), `Saved. Translating into ${saved.language}…`);
+      try {
+        await Promise.all([translatePage(saved.language), isEnglish(saved.language) ? null : translatePanel()]);
+      } catch (err) {
+        setStatus($('save-status'), `Saved, but translating failed: ${err.message}`, 'err');
+        return;
+      }
+    }
     setStatus($('save-status'), 'Saved.', 'ok');
     setTimeout(() => setStatus($('save-status'), ''), 2500);
   });

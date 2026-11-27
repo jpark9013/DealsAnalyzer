@@ -517,4 +517,5 @@
 
   ns.extractPageDeal = extractPageDeal;
   ns.scrubPersonal = scrubPersonal;
+  ns.isDealSite = (host) => DEAL_SITES.test(String(host || ''));
 })(globalThis);

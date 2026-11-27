@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "Deals Analyzer",
   "version": "1.0.0",
-  "description": "Rates deals (strong no to strong yes) against current market prices using Claude with web search, on eDealinfo.com and on any store’s product page.",
+  "description": "Rates deals (strong no to strong yes) against current market prices using Claude with web search, on eDealinfo and store pages.",
   "icons": {
     "16": "icons/icon-16.png",
     "32": "icons/icon-32.png",
@@ -52,9 +52,12 @@
         "http://*/*"
       ],
       "js": [
+        "src/content/strings.js",
         "src/content/extract.js",
         "src/content/extract-page.js",
+        "src/content/extract-list.js",
         "src/content/panel.js",
+        "src/content/badges.js",
         "src/content/main.js"
       ],
       "run_at": "document_idle"

@@ -2,6 +2,7 @@ import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeDeal, askFollowUp, testApiKey, linkOffers, resolveOffers, AnalysisError, API_VERSION, urlKey } from '../extension/src/background/claude.js';
 import { sanitizeSettings } from '../extension/src/background/settings.js';
+import { normalizeVerdict } from '../extension/src/background/verdict.js';
 import { sampleDeal, sseFromMessage } from './helpers.js';
 
 const SETTINGS = sanitizeSettings({ apiKey: 'sk-ant-test', maxSearches: 4 });
@@ -365,7 +366,10 @@ describe('resolveOffers', () => {
       'https://www.walmart.com/search?q=acer+xv272u',
       'https://www.ebay.com/sch/i.html?_nkw=acer+xv272u',
       'https://slickdeals.net/f/123-acer-xv272u',
-      'https://camelcamelcamel.com/product/acer-xv272u'
+      'https://camelcamelcamel.com/product/acer-xv272u',
+      // Articles quoting a price, which has usually changed by the time anyone reads it.
+      'https://www.pcguide.com/deals/ginormous-100-hisense-4k-tv-sees-200-price-drop/',
+      'https://www.somestore.com/blog/best-27-inch-monitors-under-200'
     ]) {
       const store = new URL(url).hostname.replace(/^www\./, '').split('.')[0];
       const out = resolve([offer(store, 'Acer XV272U', url)], research(url));
@@ -514,7 +518,7 @@ describe('checking prices against store pages', () => {
     const { fetchImpl, calls } = mockFetch([reply(withResult(cited), 'tool_use'), reply([verdictCall(revised)], 'tool_use')]);
     const fetchPage = async (url) => ({ status: 404, url, text: async () => '' });
     const result = await run(fetchImpl, SETTINGS, { fetchPage });
-    assert.match(calls[1].body.messages[0].content, /page gone \(you said \$199\.99\); removed/);
+    assert.match(calls[1].body.messages[0].content, /page gone or listing ended \(you said \$199\.99\); removed/);
     assert.equal(result.verdict.comparableOffers.length, 0);
     assert.equal(result.verdict.offersHidden, 1);
   });
@@ -715,3 +719,19 @@ describe('askFollowUp', () => {
     await assert.rejects(ask(fetchImpl), { code: 'refusal' });
   });
 });
+
+test("a note in the store's name doesn't let an article pass as the store's page", () => {
+  const url = 'https://www.pcguide.com/deals/ginormous-100-hisense-4k-tv-sees-200-price-drop/';
+  const verdict = normalizeVerdictForTest({ store: 'Hisense via Amazon (price cited by PC Guide, no page fetched)', url });
+  const out = resolveOffers(verdict, sampleDeal(), { queries: [], sources: new Map([[urlKey(url), { url, title: 'PC Guide' }]]) });
+  assert.equal(out.comparableOffers.length, 0);
+});
+
+function normalizeVerdictForTest({ store, url }) {
+  return normalizeVerdict({
+    rating: 'no',
+    headline: 'h',
+    deal_price: 679.88,
+    offers: [{ match: 'equivalent', store, url, product: 'Hisense 100" QD7', price: 1699.96, condition: 'new', diff: '' }]
+  });
+}

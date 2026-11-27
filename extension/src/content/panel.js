@@ -5,38 +5,16 @@
 
   const ns = (root.DealsAnalyzer = root.DealsAnalyzer || {});
 
-  const RATING_LABELS = {
-    strong_no: 'Strong no',
-    no: 'No',
-    maybe: 'Maybe',
-    yes: 'Yes',
-    strong_yes: 'Strong yes'
-  };
-  const RATING_ORDER = Object.keys(RATING_LABELS);
-
+  // Words come from strings.js, in the shopper's language once translated.
+  const t = (key, vars) => ns.t(key, vars);
+  const RATING_ORDER = ['strong_no', 'no', 'maybe', 'yes', 'strong_yes'];
+  const ratingLabel = (rating) => t(`r_${rating}`);
   // How a compared offer's specs stack up against the deal's product.
-  const MATCH_LABELS = {
-    same_item: 'same item',
-    equivalent: 'equivalent',
-    better: 'better specs',
-    worse: 'weaker specs'
-  };
-
-  const SUGGESTED_QUESTIONS = [
-    'What would you buy instead?',
-    'Is this likely to get cheaper soon?',
-    'What are the biggest downsides?'
-  ];
-
+  const MATCHES = ['same_item', 'equivalent', 'better', 'worse'];
+  const matchLabel = (match) => t(MATCHES.includes(match) ? `m_${match}` : 'm_similar');
+  const SUGGESTED_QUESTIONS = ['q_instead', 'q_cheaper', 'q_downsides'];
   // What the panel says while an analysis runs.
-  const STAGE_LABELS = {
-    searching: 'Searching stores for current prices…',
-    reading: 'Reading the search results…',
-    thinking: 'Weighing the evidence…',
-    writing: 'Writing the verdict…',
-    checking: 'Checking prices on the store pages…',
-    rechecking: 'Prices differ from the search results; re-rating…'
-  };
+  const STAGES = ['searching', 'reading', 'thinking', 'writing', 'checking', 'rechecking'];
 
   const MODEL_LABELS = {
     'claude-haiku-5-5': 'Haiku 5.5',
@@ -138,6 +116,26 @@
     a:hover { text-decoration: underline; }
     .reasons { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
     details summary { cursor: pointer; color: #57606a; font-size: 12px; }
+    .confidence { cursor: help; border-bottom: 1px dotted #8c959f; }
+    .unconfirmed { display: block; font-size: 10px; font-weight: 400; color: #bc4c00; cursor: help; }
+    td.num.dim > .amount { color: #6e7781; text-decoration: line-through; }
+    .simple-row { display: flex; gap: 8px; align-items: baseline; padding: 4px 0; border-top: 1px solid #f0f2f4; }
+    .simple-row:first-child { border-top: 0; }
+    .simple-row .what { flex: 1; min-width: 0; }
+    .simple-row .what .prod { color: #57606a; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .simple-row .num { text-align: right; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+    .discounts ul { padding: 0; }
+    .discounts li { list-style: none; padding: 6px 0; border-top: 1px solid #f0f2f4; display: grid; gap: 2px; }
+    .discounts li:first-child { border-top: 0; }
+    .discounts .who { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; color: #57606a; }
+    .discounts .mine { color: #1a7f37; margin-left: 6px; }
+    .discounts .code { display: inline-flex; gap: 6px; align-items: center; margin-top: 2px; }
+    .discounts code { font: 600 12px ui-monospace, SFMono-Regular, Menlo, monospace; padding: 2px 6px; border: 1px dashed #8c959f; border-radius: 4px; background: #f6f8fa; }
+    .discounts .copy { font-size: 11px; padding: 1px 8px; border: 1px solid #d0d7de; border-radius: 6px; background: #fff; }
+    .discounts .warn { font-size: 10px; color: #bc4c00; }
+    .discounts .note { color: #6e7781; font-size: 11px; margin: 6px 0 0; }
+    .discounts .loading { display: flex; gap: 8px; align-items: center; color: #57606a; font-size: 12px; }
+    .spinner.small-spinner { width: 14px; height: 14px; border-width: 2px; flex: none; }
     details ul { margin-top: 6px; font-size: 12px; }
     footer {
       display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-top: 1px solid #eaeef2;
@@ -244,20 +242,20 @@
   function timeAgo(iso) {
     const seconds = Math.max(0, (Date.now() - Date.parse(iso)) / 1000);
     if (!Number.isFinite(seconds)) return '';
-    if (seconds < 60) return 'just now';
-    if (seconds < 3600) return `${Math.round(seconds / 60)} min ago`;
-    if (seconds < 86400) return `${Math.round(seconds / 3600)} h ago`;
-    return `${Math.round(seconds / 86400)} d ago`;
+    if (seconds < 60) return t('ago_now');
+    if (seconds < 3600) return t('ago_min', { n: Math.round(seconds / 60) });
+    if (seconds < 86400) return t('ago_h', { n: Math.round(seconds / 3600) });
+    return t('ago_d', { n: Math.round(seconds / 86400) });
   }
 
   // "27% less than typical" / "8% more than typical"
   function deltaVs(dealPrice, reference) {
     if (!reference || typeof dealPrice !== 'number') return null;
     const pct = Math.round(((reference - dealPrice) / reference) * 100);
-    if (pct === 0) return h('span', { class: 'delta muted' }, 'same');
+    if (pct === 0) return h('span', { class: 'delta muted' }, t('d_same'));
     return pct > 0
-      ? h('span', { class: 'delta good' }, `${pct}% less`)
-      : h('span', { class: 'delta bad' }, `${-pct}% more`);
+      ? h('span', { class: 'delta good' }, t('d_less', { n: pct }))
+      : h('span', { class: 'delta bad' }, t('d_more', { n: -pct }));
   }
 
   function renderScale(rating) {
@@ -273,7 +271,7 @@
       h(
         'div',
         { class: 'scale-labels' },
-        RATING_ORDER.map((r, i) => h('span', { class: i === active ? 'on' : '' }, RATING_LABELS[r]))
+        RATING_ORDER.map((r, i) => h('span', { class: i === active ? 'on' : '' }, ratingLabel(r)))
       )
     );
   }
@@ -328,7 +326,7 @@
         ? h(
             'div',
             { class: 'cites' },
-            'Sources: ',
+            `${t('sources')} `,
             sources.map((s, i) =>
               h('a', { href: safeHref(s.url), target: '_blank', rel: 'noopener noreferrer', title: s.title }, `[${i + 1}] ${hostOf(s.url)}`)
             )
@@ -340,47 +338,122 @@
 
   // Where an offer's price comes from, since only some could be read from the store.
   function renderCheck(o) {
-    const age = o.pageAge ? `; that page was ${o.pageAge}` : '';
-    if (o.check === 'confirmed') return h('span', { class: 'check confirmed', title: 'Read from the store page' }, `✓ checked ${timeAgo(o.checkedAt)}`);
-    if (o.check === 'changed') return h('span', { class: 'check changed', title: 'The search result showed a different price; this one is from the store page' }, `store page, ${timeAgo(o.checkedAt)}`);
-    if (o.check === 'unverified') return h('span', { class: 'check unverified', title: `The store didn't let us read its page, so this price comes from a search result${age}. Open the link to check.` }, 'not confirmed');
+    if (o.check === 'confirmed') return h('span', { class: 'check confirmed', title: t('c_confirmed_tip') }, t('c_confirmed', { ago: timeAgo(o.checkedAt) }));
+    if (o.check === 'changed') return h('span', { class: 'check changed', title: t('c_changed_tip') }, t('c_changed', { ago: timeAgo(o.checkedAt) }));
+    if (o.check === 'unverified') {
+      const tip = o.pageAge ? t('c_unverified_age_tip', { age: o.pageAge }) : t('c_unverified_tip');
+      return h('span', { class: 'check unverified', title: tip }, t('c_unverified'));
+    }
     return null;
+  }
+
+  // "not confirmed" under a lower price no store page backed up (confidence.js).
+  function unconfirmedTag(state) {
+    return state === 'unconfirmed' ? h('span', { class: 'unconfirmed', title: t('p_unconfirmed_tip') }, t('p_unconfirmed')) : null;
+  }
+
+  // Why the confidence is what it is, for its tooltip.
+  function confidenceTip(v) {
+    const reasons = (v.confidenceReasons || []).map((r) => `${r.sign > 0 ? '+' : '−'} ${t(`conf_${r.code}`, { n: r.n ?? '' })}`);
+    return reasons.length ? `${t('conf_why')}\n${reasons.join('\n')}` : null;
+  }
+
+  function verdictHeader(v, result) {
+    return h(
+      'div',
+      { class: 'verdict-row' },
+      h('span', { class: `pill r-${v.rating}` }, ratingLabel(v.rating)),
+      v.confidence ? h('span', { class: 'muted small confidence', title: confidenceTip(v) }, t(`conf_${v.confidence}`)) : null,
+      result.revisedAt ? h('span', { class: 'revised' }, t('revised_question')) : null,
+      v.repriced ? h('span', { class: 'revised' }, t('repriced')) : null
+    );
+  }
+
+  // Confirmed and live prices first, then the ones only a search result gave.
+  function byEvidence(offers) {
+    const live = (o) => (o.check === 'confirmed' || o.check === 'changed' ? 0 : 1);
+    return [...offers].sort((a, b) => {
+      if (live(a) !== live(b)) return live(a) - live(b);
+      if (a.price === null || b.price === null) return (a.price === null) - (b.price === null);
+      return a.price - b.price;
+    });
+  }
+
+  // The simple verdict: the rating, and the deal against the same item and an
+  // equivalent product elsewhere, each linked to the store page it was read from.
+  function renderSimple(result) {
+    const v = result.verdict;
+    const support = v.priceSupport || {};
+    const row = (label, offer, price, state) =>
+      h(
+        'div',
+        { class: 'simple-row' },
+        h(
+          'div',
+          { class: 'what' },
+          h('div', null, label),
+          offer ? h('div', { class: 'prod', title: offer.product || '' }, offer.url ? link(offer.url, offer.store) : offer.store, offer.product ? ` · ${offer.product}` : '') : null
+        ),
+        h(
+          'div',
+          { class: `num${state === 'unconfirmed' ? ' dim' : ''}` },
+          typeof price === 'number' ? h('span', { class: 'amount' }, money(price)) : h('span', { class: 'muted' }, t('p_none')),
+          typeof price === 'number' ? deltaVs(v.dealPrice, price) : null,
+          offer ? renderCheck(offer) : null,
+          unconfirmedTag(state)
+        )
+      );
+    const sameOffer = v.comparableOffers.find((o) => o.match === 'same_item') || null;
+    const equivOffer = v.comparableOffers.find((o) => o.match !== 'same_item') || null;
+    return [
+      v.rating ? h('section', { class: 'verdict', 'data-rating': v.rating }, verdictHeader(v, result), renderScale(v.rating)) : null,
+      h(
+        'section',
+        null,
+        h('h3', null, t('price_check')),
+        row(t('p_this_deal'), null, v.dealPrice, null),
+        row(t('p_same'), sameOffer, v.sameItemPrice, support.sameItem),
+        row(v.equivalentProduct ? `${t('p_equivalent_product')}` : t('p_equivalent'), equivOffer, v.equivalentMarketPrice, support.equivalent)
+      )
+    ];
   }
 
   function renderVerdict(result) {
     const v = result.verdict;
-    const priceRow = (label, value, { compare = false, hint = null } = {}) =>
+    if (v.simple) return renderSimple(result);
+    const support = v.priceSupport || {};
+    const priceRow = (label, value, { compare = false, hint = null, state = null } = {}) =>
       value === null || value === undefined
         ? null
         : h(
             'tr',
             null,
             h('td', { title: hint }, label),
-            h('td', { class: 'num' }, money(value), compare ? deltaVs(v.dealPrice, value) : null)
+            h(
+              'td',
+              { class: `num${state === 'unconfirmed' ? ' dim' : ''}` },
+              h('span', { class: 'amount' }, money(value)),
+              compare ? deltaVs(v.dealPrice, value) : null,
+              unconfirmedTag(state)
+            )
           );
     const priceRows = [
-      priceRow('This deal', v.dealPrice),
-      priceRow('Equivalent products', v.equivalentMarketPrice, {
-        compare: true,
-        hint: 'Typical price of products with matching specs and build quality, in the same condition'
-      }),
-      priceRow('Same item elsewhere', v.sameItemPrice, { compare: true }),
-      priceRow('Lowest recent, same item', v.lowestRecentPrice)
+      priceRow(t('p_this_deal'), v.dealPrice),
+      priceRow(t('p_equivalent'), v.equivalentMarketPrice, { compare: true, hint: t('p_equivalent_tip'), state: support.equivalent }),
+      priceRow(t('p_same'), v.sameItemPrice, { compare: true, state: support.sameItem }),
+      priceRow(t('p_lowest'), v.lowestRecentPrice, { hint: t('p_lowest_tip') })
     ].filter(Boolean);
 
     const specs = v.keySpecs.length
-      ? h('section', null, h('h3', null, 'Judged on'), h('div', { class: 'specs' }, v.keySpecs.map((s) => h('span', { class: 'spec' }, s))))
+      ? h('section', null, h('h3', null, t('judged_on')), h('div', { class: 'specs' }, v.keySpecs.map((s) => h('span', { class: 'spec' }, s))))
       : null;
 
-    const byPrice = [...v.comparableOffers].sort((a, b) => {
-      if (a.price === null || b.price === null) return (a.price === null) - (b.price === null);
-      return a.price - b.price;
-    });
+    const byPrice = byEvidence(v.comparableOffers);
     const offers = byPrice.length
       ? h(
           'section',
           null,
-          h('h3', null, 'Compared with'),
+          h('h3', null, t('compared_with')),
           h(
             'ul',
             { class: 'offers' },
@@ -395,7 +468,7 @@
                     'div',
                     null,
                     h('span', { class: 'store' }, o.verified ? link(o.url, o.store) : o.store),
-                    h('span', { class: `tag${o.match ? ` m-${o.match}` : ''}` }, MATCH_LABELS[o.match] || 'similar'),
+                    h('span', { class: `tag${o.match ? ` m-${o.match}` : ''}` }, matchLabel(o.match)),
                     o.condition && o.condition !== 'new' ? h('span', { class: 'tag' }, o.condition) : null
                   ),
                   o.product ? h('div', { class: 'prod', title: o.product }, o.product) : null,
@@ -412,20 +485,20 @@
             )
           ),
           v.offersHidden
-            ? h('p', { class: 'offers-note' }, `${v.offersHidden} more left out: no working store page, or out of stock.`)
+            ? h('p', { class: 'offers-note' }, t('left_out_more', { n: v.offersHidden }))
             : null
         )
       : v.offersHidden
-        ? h('section', null, h('h3', null, 'Compared with'), h('p', { class: 'offers-note' }, `${v.offersHidden} found, all left out: no working store page, or out of stock.`))
+        ? h('section', null, h('h3', null, t('compared_with')), h('p', { class: 'offers-note' }, t('left_out_all', { n: v.offersHidden })))
         : null;
 
     const savings = v.savings?.length
       ? h(
           'section',
           { class: 'savings' },
-          h('h3', null, 'Ways to pay less'),
+          h('h3', null, t('pay_less')),
           h('ul', null, v.savings.map((s) => h('li', null, s.url ? link(s.url, s.text) : s.text))),
-          h('p', { class: 'note' }, "From search results. Codes and who qualifies aren't verified; check at checkout.")
+          h('p', { class: 'note' }, t('pay_less_note'))
         )
       : null;
 
@@ -434,8 +507,8 @@
         ? h(
             'div',
             { class: 'reasons' },
-            h('section', null, h('h3', null, 'Why buy'), h('ul', null, v.reasonsFor.map((r) => h('li', null, r)))),
-            h('section', null, h('h3', null, 'Why skip'), h('ul', null, v.reasonsAgainst.map((r) => h('li', null, r))))
+            h('section', null, h('h3', null, t('why_buy')), h('ul', null, v.reasonsFor.map((r) => h('li', null, r)))),
+            h('section', null, h('h3', null, t('why_skip')), h('ul', null, v.reasonsAgainst.map((r) => h('li', null, r))))
           )
         : null;
 
@@ -447,7 +520,9 @@
             h(
               'summary',
               null,
-              `${result.queries.length} search${result.queries.length === 1 ? '' : 'es'}, ${result.sources.length} source${result.sources.length === 1 ? '' : 's'}`
+              `${result.queries.length === 1 ? t('searches_one') : t('searches_many', { n: result.queries.length })}, ${
+                result.sources.length === 1 ? t('sources_one') : t('sources_many', { n: result.sources.length })
+              }`
             ),
             result.queries.length ? h('ul', null, result.queries.map((q) => h('li', null, `“${q}”`))) : null,
             result.sources.length ? h('ul', null, result.sources.map((s) => h('li', null, link(s.url, s.title)))) : null
@@ -459,14 +534,7 @@
       ? h(
           'section',
           { class: 'verdict', 'data-rating': v.rating },
-          h(
-            'div',
-            { class: 'verdict-row' },
-            h('span', { class: `pill r-${v.rating}` }, RATING_LABELS[v.rating]),
-            v.confidence ? h('span', { class: 'muted small' }, `${v.confidence} confidence`) : null,
-            result.revisedAt ? h('span', { class: 'revised' }, 'updated after your question') : null,
-            v.repriced ? h('span', { class: 'revised' }, 're-rated with live store prices') : null
-          ),
+          verdictHeader(v, result),
           v.headline ? h('div', { class: 'headline' }, v.headline) : null,
           renderScale(v.rating)
         )
@@ -475,7 +543,7 @@
     return [
       verdict,
       specs,
-      priceRows.length ? h('section', null, h('h3', null, 'Price check'), h('table', null, h('tbody', null, priceRows))) : null,
+      priceRows.length ? h('section', null, h('h3', null, t('price_check')), h('table', null, h('tbody', null, priceRows))) : null,
       offers,
       savings,
       reasons,
@@ -500,16 +568,18 @@
     const subEl = h('div', { class: 'muted small' });
     const contentEl = h('div', { class: 'body-content', 'aria-live': 'polite' });
     const metaEl = h('span', { class: 'meta' });
-    const reanalyzeBtn = h('button', { class: 'btn', type: 'button', hidden: true, onclick: () => handlers.onAnalyze(true) }, 'Re-analyze');
+    const reanalyzeBtn = h('button', { class: 'btn', type: 'button', hidden: true, onclick: () => handlers.onAnalyze(true) }, t('reanalyze'));
+    // Discounts load on their own, alongside the verdict, and stay across its states.
+    const discountsEl = h('section', { class: 'discounts', hidden: true, 'aria-live': 'polite' });
     const footer = h('footer', { hidden: true }, metaEl, reanalyzeBtn);
 
     const input = h('textarea', {
       rows: '1',
       maxlength: '1000',
-      placeholder: 'Ask a follow-up about this deal…',
-      'aria-label': 'Ask a follow-up question'
+      placeholder: t('ask_placeholder'),
+      'aria-label': t('ask_label')
     });
-    const askBtn = h('button', { class: 'btn primary', type: 'submit' }, 'Ask');
+    const askBtn = h('button', { class: 'btn primary', type: 'submit' }, t('ask'));
     const composer = h(
       'form',
       {
@@ -526,15 +596,15 @@
     const chatEl = h('section', { class: 'chat', 'aria-live': 'polite' });
 
     const tabDot = h('span', { class: 'dot' });
-    const tabLabel = h('span', null, 'Deal check');
+    const tabLabel = h('span', null, t('brand'));
     const tab = h(
       'button',
       {
         class: 'tab',
         type: 'button',
         hidden: true,
-        title: 'Show deal analysis (drag to move)',
-        'aria-label': 'Show deal analysis',
+        title: t('tab_tip'),
+        'aria-label': t('tab_label'),
         onclick: () => {
           if (tabDragged) tabDragged = false;
           else {
@@ -547,18 +617,15 @@
       tabLabel
     );
 
-    const header = h(
-      'header',
-      { title: 'Drag to move · double-click to reset size and position' },
-      h('span', { class: 'brand' }, 'Deal check'),
-      h('button', { class: 'icon-btn', type: 'button', title: 'Settings', 'aria-label': 'Settings', onclick: () => handlers.onOpenSettings() }, '⚙'),
-      h('button', { class: 'icon-btn', type: 'button', title: 'Minimize', 'aria-label': 'Minimize', onclick: () => setCollapsed(true) }, '–')
-    );
+    const brandEl = h('span', { class: 'brand' }, t('brand'));
+    const settingsBtn = h('button', { class: 'icon-btn', type: 'button', title: t('settings'), 'aria-label': t('settings'), onclick: () => handlers.onOpenSettings() }, '⚙');
+    const minimizeBtn = h('button', { class: 'icon-btn', type: 'button', title: t('minimize'), 'aria-label': t('minimize'), onclick: () => setCollapsed(true) }, '–');
+    const header = h('header', { title: t('header_tip') }, brandEl, settingsBtn, minimizeBtn);
     const panel = h(
       'aside',
-      { class: 'panel', role: 'complementary', 'aria-label': 'Deal analysis', hidden: true },
+      { class: 'panel', role: 'complementary', 'aria-label': t('panel_label'), hidden: true },
       header,
-      h('div', { class: 'scroll' }, h('div', { class: 'body' }, h('div', null, titleEl, subEl), contentEl)),
+      h('div', { class: 'scroll' }, h('div', { class: 'body' }, h('div', null, titleEl, subEl), contentEl, discountsEl)),
       composer,
       footer,
       ['l', 'r', 'b', 'bl', 'br'].map((edge) => h('div', { class: `rz rz-${edge}`, 'data-edge': edge, 'aria-hidden': 'true' }))
@@ -574,6 +641,8 @@
     let pending = null; // { question, queries } while a follow-up runs
     let askError = null;
     let loading = null; // the progress elements while an analysis runs
+    let discounts = null; // { state: 'loading'|'done'|'error', items, error }
+    let rerender = null; // redraws the current state, after the words change
 
     // --- Moving and resizing -------------------------------------------------
     // The panel starts docked top-right (from CSS). Once moved or resized it
@@ -754,13 +823,13 @@
 
     function renderChat() {
       const turns = current?.turns || [];
-      const items = [h('h3', null, 'Ask about this deal')];
+      const items = [h('h3', null, t('ask_title'))];
       if (!turns.length && !pending) {
         items.push(
           h(
             'div',
             { class: 'chips' },
-            SUGGESTED_QUESTIONS.map((q) => h('button', { class: 'chip', type: 'button', onclick: () => ask(q) }, q))
+            SUGGESTED_QUESTIONS.map((key) => h('button', { class: 'chip', type: 'button', onclick: () => ask(t(key)) }, t(key)))
           )
         );
       }
@@ -771,23 +840,81 @@
           h(
             'div',
             { class: 'msg pending' },
-            h('div', { class: 'spinner', role: 'status', 'aria-label': 'Answering' }),
+            h('div', { class: 'spinner', role: 'status', 'aria-label': t('answering') }),
             h(
               'div',
               null,
-              pending.queries.length ? 'Searching…' : 'Thinking…',
+              pending.queries.length ? t('asking_searching') : t('asking_thinking'),
               pending.queries.length ? h('ul', null, pending.queries.map((q) => h('li', null, `“${q}”`))) : null
             )
           )
         );
       }
-      if (askError) items.push(h('div', { class: 'msg error', role: 'alert' }, askError.message || 'Something went wrong.'));
+      if (askError) items.push(h('div', { class: 'msg error', role: 'alert' }, askError.message || t('went_wrong')));
       chatEl.replaceChildren(...items);
     }
 
     function revealLatest() {
       const last = chatEl.lastElementChild;
       if (last && last.scrollIntoView) last.scrollIntoView({ block: 'nearest' });
+    }
+
+    // The discounts found for this store and brand: like a coupon finder,
+    // codes to copy and programs for groups such as students and military.
+    function renderDiscounts() {
+      if (!discounts) {
+        discountsEl.hidden = true;
+        discountsEl.replaceChildren();
+        return;
+      }
+      discountsEl.hidden = false;
+      const items = [h('h3', null, t('discounts'))];
+      if (discounts.state === 'loading') {
+        items.push(h('div', { class: 'loading' }, h('div', { class: 'spinner small-spinner', role: 'status' }), t('discounts_loading')));
+      } else if (discounts.state === 'error') {
+        items.push(h('p', { class: 'note' }, t('discounts_error', { message: discounts.error?.message || t('went_wrong') })));
+      } else if (!discounts.items.length) {
+        items.push(h('p', { class: 'note' }, t('discounts_none')));
+      } else {
+        const mine = new Set(discounts.groups || []);
+        items.push(
+          h(
+            'ul',
+            null,
+            discounts.items.map((d) =>
+              h(
+                'li',
+                null,
+                h('span', { class: 'who' }, t(`w_${d.who}`), mine.has(d.who) ? h('span', { class: 'mine' }, `✓ ${t('discount_for_you')}`) : null),
+                h('span', null, link(d.url, d.offer)),
+                d.code
+                  ? h(
+                      'span',
+                      { class: 'code' },
+                      h('code', null, d.code),
+                      h('button', { class: 'copy', type: 'button', onclick: (event) => copyCode(event.currentTarget, d.code) }, t('copy'))
+                    )
+                  : null,
+                d.code && d.couponSite ? h('span', { class: 'warn' }, t('discount_coupon_site')) : null
+              )
+            )
+          ),
+          h('p', { class: 'note' }, t('discounts_note'))
+        );
+      }
+      discountsEl.replaceChildren(...items);
+    }
+
+    function copyCode(button, code) {
+      const done = () => {
+        button.textContent = t('copied');
+        setTimeout(() => (button.textContent = t('copy')), 1500);
+      };
+      try {
+        Promise.resolve(navigator.clipboard?.writeText(code)).then(done, () => {});
+      } catch {
+        // No clipboard here; the code is on screen to select.
+      }
     }
 
     function renderResult() {
@@ -814,7 +941,7 @@
 
     function setTab(rating) {
       tabDot.className = `dot${rating ? ` r-${rating}` : ''}`;
-      tabLabel.textContent = rating ? RATING_LABELS[rating] : 'Deal check';
+      tabLabel.textContent = rating ? ratingLabel(rating) : t('brand');
     }
 
     function setContent(...nodes) {
@@ -830,7 +957,7 @@
       if (!result) return;
       const parts = [MODEL_LABELS[result.model] || result.model];
       if (typeof result.usage?.costUsd === 'number') parts.push(`~$${result.usage.costUsd.toFixed(3)}`);
-      parts.push(result.cached ? `cached, ${timeAgo(result.analyzedAt)}` : timeAgo(result.analyzedAt));
+      parts.push(result.cached ? t('cached_ago', { ago: timeAgo(result.analyzedAt) }) : timeAgo(result.analyzedAt));
       metaEl.textContent = parts.join(' · ');
     }
 
@@ -854,6 +981,7 @@
           .join(' · ');
       },
       showIdle() {
+        rerender = () => this.showIdle();
         leaveResult();
         setTab(null);
         setFooter(null);
@@ -861,12 +989,13 @@
           h(
             'div',
             { class: 'notice' },
-            h('div', null, 'Check this deal against current prices at other stores.'),
-            h('div', null, h('button', { class: 'btn primary', type: 'button', onclick: () => handlers.onAnalyze(false) }, 'Analyze deal'))
+            h('div', null, t('idle')),
+            h('div', null, h('button', { class: 'btn primary', type: 'button', onclick: () => handlers.onAnalyze(false) }, t('analyze_deal')))
           )
         );
       },
       showNeedsKey() {
+        rerender = () => this.showNeedsKey();
         leaveResult();
         setTab(null);
         setFooter(null);
@@ -874,23 +1003,24 @@
           h(
             'div',
             { class: 'notice' },
-            h('div', null, 'Add your Anthropic API key to start rating deals. It stays in this browser.'),
-            h('div', null, h('button', { class: 'btn primary', type: 'button', onclick: () => handlers.onOpenSettings() }, 'Open settings'))
+            h('div', null, t('needs_key')),
+            h('div', null, h('button', { class: 'btn primary', type: 'button', onclick: () => handlers.onOpenSettings() }, t('open_settings')))
           )
         );
       },
       showLoading() {
+        rerender = null;
         leaveResult();
         setTab(null);
         setFooter(null);
         const started = Date.now();
-        const status = h('div', null, STAGE_LABELS.searching);
+        const status = h('div', null, t('s_searching'));
         const list = h('ul', { class: 'small muted' });
         // The verdict, field by field, as Claude writes it.
         const partial = h('div', { class: 'body-content' });
         const elapsed = h('div', { class: 'muted small' }, '0 s');
         setContent(
-          h('div', { class: 'loading' }, h('div', { class: 'spinner', role: 'status', 'aria-label': 'Analyzing' }), h('div', null, status, elapsed, list)),
+          h('div', { class: 'loading' }, h('div', { class: 'spinner', role: 'status', 'aria-label': t('analyzing') }), h('div', null, status, elapsed, list)),
           partial
         );
         loading = { status, list, partial };
@@ -901,7 +1031,7 @@
       /** @param {{stage?: string, queries?: string[], partial?: object|null}} progress */
       updateProgress({ stage, queries = [], partial = null } = {}) {
         if (!loading) return;
-        if (STAGE_LABELS[stage]) loading.status.textContent = STAGE_LABELS[stage];
+        if (STAGES.includes(stage)) loading.status.textContent = t(`s_${stage}`);
         loading.list.replaceChildren(...queries.map((q) => h('li', null, `“${q}”`)));
         if (partial) {
           if (partial.rating) setTab(partial.rating);
@@ -909,6 +1039,7 @@
         }
       },
       showResult(result) {
+        rerender = () => renderResult();
         current = { ...result, turns: result.turns || [] };
         pending = null;
         askError = null;
@@ -946,6 +1077,7 @@
         revealLatest();
       },
       showError(error) {
+        rerender = () => this.showError(error);
         leaveResult();
         setTab(null);
         setFooter(null);
@@ -954,16 +1086,41 @@
           h(
             'div',
             { class: 'notice error', role: 'alert' },
-            h('div', null, error.message || 'Something went wrong.'),
+            h('div', null, error.message || t('went_wrong')),
             h(
               'div',
               null,
               needsSettings
-                ? h('button', { class: 'btn', type: 'button', onclick: () => handlers.onOpenSettings() }, 'Open settings')
-                : h('button', { class: 'btn', type: 'button', onclick: () => handlers.onAnalyze(true) }, 'Try again')
+                ? h('button', { class: 'btn', type: 'button', onclick: () => handlers.onOpenSettings() }, t('open_settings'))
+                : h('button', { class: 'btn', type: 'button', onclick: () => handlers.onAnalyze(true) }, t('try_again'))
             )
           )
         );
+      },
+      /** @param {{state: string, items?: object[], groups?: string[], error?: object}|null} next */
+      setDiscounts(next) {
+        discounts = next ? { items: [], ...next } : null;
+        renderDiscounts();
+      },
+      /** Puts the panel's own words in the language strings.js now holds. */
+      relabel() {
+        brandEl.textContent = t('brand');
+        settingsBtn.title = t('settings');
+        settingsBtn.setAttribute('aria-label', t('settings'));
+        minimizeBtn.title = t('minimize');
+        minimizeBtn.setAttribute('aria-label', t('minimize'));
+        header.title = t('header_tip');
+        panel.setAttribute('aria-label', t('panel_label'));
+        tab.title = t('tab_tip');
+        tab.setAttribute('aria-label', t('tab_label'));
+        reanalyzeBtn.textContent = t('reanalyze');
+        input.placeholder = t('ask_placeholder');
+        input.setAttribute('aria-label', t('ask_label'));
+        askBtn.textContent = t('ask');
+        if (!loading) setTab(current?.verdict?.rating || null);
+        if (rerender) rerender();
+        if (current) setFooter(current);
+        renderDiscounts();
       },
       destroy() {
         if (timer) clearInterval(timer);
@@ -973,5 +1130,6 @@
   }
 
   ns.createPanel = createPanel;
-  ns.RATING_LABELS = RATING_LABELS;
+  // For the product badges (badges.js).
+  ns.ui = { h, money, deltaVs, safeHref, ratingLabel, STYLE_RATINGS: STYLE.match(/\.r-strong_no[\s\S]*?\.r-strong_yes[^}]*\}/)[0] };
 })(globalThis);

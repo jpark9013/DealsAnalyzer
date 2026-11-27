@@ -10,7 +10,15 @@ export const DETAIL_URL =
   'https://www.edealinfo.com/d/00889523049914/GIGABYTE-M27Q2-27-inch-Widescreen-WQHD-1440p-2560-x-1440-200Hz/?ref=tg';
 export const HOME_URL = 'https://www.edealinfo.com/';
 
-export const CONTENT_SCRIPTS = ['extension/src/content/extract.js', 'extension/src/content/panel.js', 'extension/src/content/main.js'];
+export const CONTENT_SCRIPTS = [
+  'extension/src/content/strings.js',
+  'extension/src/content/extract.js',
+  'extension/src/content/extract-page.js',
+  'extension/src/content/extract-list.js',
+  'extension/src/content/panel.js',
+  'extension/src/content/badges.js',
+  'extension/src/content/main.js'
+];
 
 /** A jsdom window with the given content scripts run in it, as the browser would inject them. */
 export function makeDom(html, { url = DETAIL_URL, scripts = [], before } = {}) {

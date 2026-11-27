@@ -5,6 +5,11 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      chrome_web_store:
+        description: Submit the zip to the Chrome Web Store (main only)
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -129,3 +134,28 @@ jobs:
             --title "Deals Analyzer $VERSION" \
             --notes-file notes.md \
             --latest
+
+  chrome-web-store:
+    name: Submit to the Chrome Web Store
+    # Only when run by hand on main with the box ticked: every submission goes
+    # through Google's review, and the store takes one at a time.
+    if: github.event_name == 'workflow_dispatch' && inputs.chrome_web_store && github.ref == 'refs/heads/main'
+    needs: package
+    runs-on: ubuntu-latest
+    environment: chrome-web-store
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: actions/download-artifact@v8
+        with:
+          name: deals-analyzer-extension
+          path: dist
+      - name: Upload and submit for review
+        env:
+          VERSION: ${{ needs.package.outputs.version }}
+          CWS_PUBLISHER_ID: ${{ vars.CWS_PUBLISHER_ID }}
+          CWS_EXTENSION_ID: ${{ vars.CWS_EXTENSION_ID }}
+          CWS_SERVICE_ACCOUNT_KEY: ${{ secrets.CWS_SERVICE_ACCOUNT_KEY }}
+        run: node scripts/publish-chrome.mjs "dist/deals-analyzer-$VERSION.zip"
